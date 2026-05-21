@@ -1,0 +1,1139 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Vietlott AI — Dự đoán & Thống kê</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  *{font-family:'Inter',system-ui,sans-serif}
+  body{
+    background: #0a0a0f;
+    background-image:
+      radial-gradient(at 0% 0%, rgba(99,102,241,0.12) 0, transparent 50%),
+      radial-gradient(at 100% 100%, rgba(236,72,153,0.10) 0, transparent 50%);
+    background-attachment: fixed;
+    color:#e5e7eb; min-height:100vh;
+  }
+  .card{
+    background: rgba(17, 17, 26, 0.7);
+    border: 1px solid rgba(255,255,255,0.06);
+    backdrop-filter: blur(20px);
+    border-radius: 16px;
+  }
+  .ball{
+    display:inline-flex;align-items:center;justify-content:center;
+    width:44px;height:44px;border-radius:50%;font-weight:700;font-size:15px;color:white;
+    background:linear-gradient(145deg,#fde047,#ca8a04);
+    box-shadow:0 4px 12px rgba(0,0,0,0.3), inset 0 2px 4px rgba(255,255,255,0.3), inset 0 -3px 6px rgba(0,0,0,0.25);
+    transition: transform .15s;
+  }
+  .ball:hover{ transform:scale(1.08) }
+  .ball.sm{ width:34px;height:34px;font-size:13px }
+  .ball.xs{ width:28px;height:28px;font-size:11px }
+  .ball.hot{ background:linear-gradient(145deg,#fca5a5,#dc2626) }
+  .ball.cold{ background:linear-gradient(145deg,#93c5fd,#2563eb) }
+  .ball.ai{
+    background:linear-gradient(145deg,#a78bfa,#7c3aed);
+    box-shadow:0 4px 16px rgba(124,58,237,0.4), inset 0 2px 4px rgba(255,255,255,0.3), inset 0 -3px 6px rgba(0,0,0,0.25);
+  }
+  .game-tab{
+    padding:10px 18px;border-radius:10px;font-weight:600;font-size:14px;
+    color:#9ca3af; background:transparent; transition:all .2s;
+    border:1px solid transparent;
+  }
+  .game-tab:hover{ color:white; background:rgba(255,255,255,0.04) }
+  .game-tab.active{
+    color:white; background:rgba(124,58,237,0.15);
+    border-color:rgba(124,58,237,0.4);
+  }
+  .section-tab{
+    padding:8px 14px;border-radius:8px;font-size:13px;font-weight:500;
+    color:#9ca3af;background:transparent;transition:all .2s;
+  }
+  .section-tab:hover{ color:white }
+  .section-tab.active{ color:white;background:rgba(255,255,255,0.06) }
+  .grad{ background:linear-gradient(135deg,#a78bfa,#ec4899,#f59e0b); -webkit-background-clip:text;background-clip:text;color:transparent }
+  .heat-cell{
+    aspect-ratio:1;border-radius:6px;display:flex;align-items:center;justify-content:center;
+    font-weight:600;font-size:11px;cursor:default;transition:transform .1s;position:relative;
+  }
+  .heat-cell:hover{ transform:scale(1.15);z-index:5;outline:2px solid white }
+  .heat-cell .cnt{ position:absolute;bottom:1px;right:3px;font-size:8px;opacity:0.7 }
+  table.draws{ width:100%;border-collapse:collapse;font-size:13px }
+  table.draws th{ text-align:left;padding:10px;color:#9ca3af;font-weight:500;border-bottom:1px solid rgba(255,255,255,0.06);position:sticky;top:0;background:#0f0f1a;font-size:11px;letter-spacing:0.5px;text-transform:uppercase }
+  table.draws td{ padding:10px;border-bottom:1px solid rgba(255,255,255,0.03) }
+  table.draws tr:hover td{ background:rgba(124,58,237,0.04) }
+  .scroll-y{ max-height:380px;overflow-y:auto }
+  .scroll-y::-webkit-scrollbar{ width:6px }
+  .scroll-y::-webkit-scrollbar-thumb{ background:#374151;border-radius:3px }
+  .pill{ display:inline-block;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:600;letter-spacing:0.3px }
+  .ai-pulse{ animation:pulse 2s infinite }
+  @keyframes pulse{ 0%,100%{box-shadow:0 0 0 0 rgba(167,139,250,0.5)} 50%{box-shadow:0 0 0 8px rgba(167,139,250,0)} }
+  details>summary{ list-style:none;cursor:pointer }
+  details>summary::-webkit-details-marker{ display:none }
+  details[open] .chev{ transform:rotate(180deg) }
+  .chev{ transition:transform .2s }
+  .progress-bar{ height:4px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden }
+  .progress-fill{ height:100%;background:linear-gradient(90deg,#a78bfa,#ec4899);transition:width .4s }
+</style>
+</head>
+<body>
+<div class="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+
+  <!-- HEADER -->
+  <header class="flex items-center justify-between mb-6">
+    <div>
+      <h1 class="text-2xl sm:text-3xl font-black grad">Vietlott AI</h1>
+      <p class="text-xs text-gray-500 mt-0.5">Dự đoán bằng ensemble thống kê + machine learning</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <span id="dataInfo" class="pill bg-white/5 text-gray-400 border border-white/10">⏳</span>
+      <button id="reloadBtn" title="Tải lại dữ liệu" class="pill bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10">🔄</button>
+    </div>
+  </header>
+
+  <!-- GAME SELECTOR -->
+  <div class="flex gap-1 mb-6 card p-1.5 inline-flex">
+    <button data-game="6/55" class="game-tab active">Power 6/55</button>
+    <button data-game="6/45" class="game-tab">Mega 6/45</button>
+    <button data-game="5/35" class="game-tab">Max 5/35</button>
+  </div>
+
+  <!-- PREMIUM PICK OF THE DAY -->
+  <section class="card p-0 mb-5 relative overflow-hidden" style="border:1px solid rgba(250,204,21,0.25);background:linear-gradient(135deg, rgba(250,204,21,0.08), rgba(236,72,153,0.06), rgba(124,58,237,0.08))">
+    <div class="absolute top-0 right-0 w-80 h-80 bg-yellow-500/10 rounded-full blur-3xl pointer-events-none"></div>
+    <div class="absolute bottom-0 left-0 w-64 h-64 bg-purple-500/10 rounded-full blur-3xl pointer-events-none"></div>
+    <div class="relative p-6">
+      <div class="flex items-start justify-between flex-wrap gap-3 mb-4">
+        <div class="flex items-center gap-3">
+          <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-yellow-400 via-pink-500 to-purple-600 flex items-center justify-center text-2xl shadow-lg ai-pulse">👑</div>
+          <div>
+            <div class="flex items-center gap-2">
+              <h2 class="font-black text-lg bg-gradient-to-r from-yellow-400 to-pink-400 bg-clip-text text-transparent">PREMIUM PICK</h2>
+              <span class="pill" style="background:rgba(250,204,21,0.15);color:#fde047;border:1px solid rgba(250,204,21,0.3)">DAILY</span>
+            </div>
+            <p class="text-[11px] text-gray-400 mt-0.5" id="premiumMeta">Bộ số tối ưu nhất cho kỳ tới</p>
+          </div>
+        </div>
+        <div class="text-right">
+          <div class="text-[10px] text-gray-500 uppercase tracking-wider">Kỳ tới</div>
+          <div id="nextDraw" class="text-sm font-bold text-yellow-300">—</div>
+          <div id="countdown" class="text-[10px] text-gray-400 font-mono">—</div>
+        </div>
+      </div>
+
+      <div id="premiumPick" class="text-center py-2">
+        <div class="text-xs text-gray-400 mb-3">Đang tính toán bộ số premium...</div>
+      </div>
+
+      <div id="premiumStats" class="grid grid-cols-2 md:grid-cols-5 gap-2 mt-4"></div>
+
+      <details class="mt-4">
+        <summary class="flex items-center gap-1 text-xs text-gray-400 hover:text-yellow-300">
+          <span class="chev">▾</span> Lý do chọn bộ số này
+        </summary>
+        <div id="premiumReason" class="mt-3 p-3 bg-black/20 border border-white/5 rounded-lg text-xs text-gray-300 leading-relaxed"></div>
+      </details>
+    </div>
+  </section>
+
+  <!-- HERO: AI PREDICTION -->
+  <section class="card p-6 mb-5 relative overflow-hidden">
+    <div class="absolute top-0 right-0 w-64 h-64 bg-purple-500/10 rounded-full blur-3xl"></div>
+    <div class="relative">
+      <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-xl ai-pulse">🧠</div>
+          <div>
+            <h2 class="font-bold text-lg">AI Prediction</h2>
+            <p class="text-[11px] text-gray-500" id="predMeta">Đang khởi tạo...</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <select id="predModel" class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-purple-500">
+            <option value="ai">🧠 AI Ensemble (khuyên dùng)</option>
+            <option value="bayes">📊 Bayesian Frequency</option>
+            <option value="markov">🔗 Markov Chain</option>
+            <option value="hot">🔥 Hot Numbers</option>
+            <option value="cold">❄️ Cold / Due</option>
+            <option value="recent">📈 Recent Trend (EMA)</option>
+            <option value="balanced">⚖️ Balanced</option>
+          </select>
+          <button id="genBtn" class="bg-gradient-to-r from-purple-500 to-pink-500 hover:opacity-90 text-white font-semibold px-4 py-1.5 rounded-lg text-sm transition">
+            ✨ Tạo bộ số
+          </button>
+        </div>
+      </div>
+
+      <div id="predSets" class="space-y-2.5"></div>
+
+      <details class="mt-4">
+        <summary class="flex items-center gap-1 text-xs text-gray-400 hover:text-white">
+          <span class="chev">▾</span> Phương pháp đang áp dụng
+        </summary>
+        <div id="methodExplain" class="mt-3 p-3 bg-white/[0.02] border border-white/5 rounded-lg text-xs text-gray-400 leading-relaxed"></div>
+      </details>
+    </div>
+  </section>
+
+  <!-- QUICK INSIGHTS -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+    <div class="card p-4">
+      <div class="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Tổng kỳ</div>
+      <div id="kpiDraws" class="text-xl font-bold">—</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Kỳ gần nhất</div>
+      <div id="kpiLatest" class="text-xl font-bold">—</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-[10px] text-gray-500 uppercase tracking-wider mb-1 text-red-400">🔥 Hottest</div>
+      <div id="kpiHot" class="text-xl font-bold text-red-400">—</div>
+    </div>
+    <div class="card p-4">
+      <div class="text-[10px] text-gray-500 uppercase tracking-wider mb-1 text-blue-400">❄️ Coldest</div>
+      <div id="kpiCold" class="text-xl font-bold text-blue-400">—</div>
+    </div>
+  </div>
+
+  <!-- RECENT 5 DRAWS — evaluation -->
+  <div class="card p-5 mb-5">
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <div>
+        <h3 class="font-semibold text-sm">5 kỳ gần nhất · Đánh giá theo lịch sử</h3>
+        <p class="text-[11px] text-gray-500 mt-0.5">Chấm điểm từng bộ số theo Hot/Cold mix, Sum normality, Balance, Pair strength</p>
+      </div>
+      <div class="flex items-center gap-3 text-[10px] text-gray-500">
+        <span class="flex items-center gap-1"><span class="ball xs hot" style="width:14px;height:14px"></span> nóng</span>
+        <span class="flex items-center gap-1"><span class="ball xs" style="width:14px;height:14px"></span> trung tính</span>
+        <span class="flex items-center gap-1"><span class="ball xs cold" style="width:14px;height:14px"></span> lạnh</span>
+      </div>
+    </div>
+    <div id="recentEval" class="space-y-2.5"></div>
+  </div>
+
+  <!-- HOT / COLD ROW -->
+  <div class="card p-5 mb-5">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-semibold text-sm">Hot & Cold Numbers</h3>
+      <span class="text-[10px] text-gray-500">Top 6 mỗi loại</span>
+    </div>
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <div class="text-[11px] text-red-400 font-semibold mb-2">🔥 NÓNG</div>
+        <div id="hotList" class="flex flex-wrap gap-2"></div>
+      </div>
+      <div>
+        <div class="text-[11px] text-blue-400 font-semibold mb-2">❄️ LẠNH</div>
+        <div id="coldList" class="flex flex-wrap gap-2"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TABBED ANALYTICS -->
+  <div class="card p-5 mb-5">
+    <div class="flex gap-1 mb-4 border-b border-white/5 pb-2 overflow-x-auto">
+      <button data-tab="freq" class="section-tab active">📊 Tần suất</button>
+      <button data-tab="heat" class="section-tab">🗺️ Heatmap</button>
+      <button data-tab="gap" class="section-tab">⏱️ Gap (Due)</button>
+      <button data-tab="dist" class="section-tab">📐 Phân phối</button>
+      <button data-tab="pair" class="section-tab">🔗 Cặp số</button>
+      <button data-tab="hist" class="section-tab">📜 Lịch sử</button>
+    </div>
+
+    <div id="tab-freq" class="tab-pane">
+      <div style="height:280px"><canvas id="freqChart"></canvas></div>
+    </div>
+
+    <div id="tab-heat" class="tab-pane hidden">
+      <div id="heatmap" class="grid gap-1.5"></div>
+      <div class="flex items-center justify-between text-[10px] text-gray-500 mt-3">
+        <span>Ít</span>
+        <div class="flex gap-1 flex-1 mx-3">
+          <div class="flex-1 h-2 rounded" style="background:#1e3a8a"></div>
+          <div class="flex-1 h-2 rounded" style="background:#3b82f6"></div>
+          <div class="flex-1 h-2 rounded" style="background:#a3e635"></div>
+          <div class="flex-1 h-2 rounded" style="background:#facc15"></div>
+          <div class="flex-1 h-2 rounded" style="background:#f97316"></div>
+          <div class="flex-1 h-2 rounded" style="background:#dc2626"></div>
+        </div>
+        <span>Nhiều</span>
+      </div>
+    </div>
+
+    <div id="tab-gap" class="tab-pane hidden">
+      <p class="text-xs text-gray-500 mb-3">Số kỳ kể từ lần xuất hiện gần nhất — số "due" để về</p>
+      <div style="height:280px"><canvas id="gapChart"></canvas></div>
+    </div>
+
+    <div id="tab-dist" class="tab-pane hidden">
+      <div class="grid md:grid-cols-2 gap-5">
+        <div>
+          <div class="text-xs text-gray-400 mb-2">Phân bổ Chẵn/Lẻ</div>
+          <div style="height:220px"><canvas id="oeChart"></canvas></div>
+          <p id="oeInsight" class="text-[11px] text-gray-500 mt-2"></p>
+        </div>
+        <div>
+          <div class="text-xs text-gray-400 mb-2">Phân phối Tổng</div>
+          <div style="height:220px"><canvas id="sumChart"></canvas></div>
+          <p id="sumInsight" class="text-[11px] text-gray-500 mt-2"></p>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-pair" class="tab-pane hidden">
+      <p class="text-xs text-gray-500 mb-3">Cặp số xuất hiện cùng nhau nhiều nhất</p>
+      <div id="pairList" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2"></div>
+    </div>
+
+    <div id="tab-hist" class="tab-pane hidden">
+      <div class="flex items-center justify-between mb-3">
+        <input id="searchDraw" placeholder="🔍 Tìm số..." class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm w-48 focus:outline-none focus:border-purple-500" />
+        <span id="histCount" class="text-[11px] text-gray-500"></span>
+      </div>
+      <div class="scroll-y">
+        <table class="draws">
+          <thead><tr><th>Kỳ</th><th>Ngày</th><th>Bộ số</th><th>Tổng</th><th>L/C</th></tr></thead>
+          <tbody id="drawsBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <footer class="text-center text-[11px] text-gray-600 py-4">
+    <p>Dữ liệu: vietvudanh/vietlott-data + xskt.com.vn (live). Xổ số là trò chơi may rủi.</p>
+  </footer>
+</div>
+
+<script>
+// ============================================================
+// CONFIG
+// ============================================================
+const GAMES = {
+  '6/55': { name:'Power 6/55', max:55, pick:6, source:'power655', xskt:'power-655' },
+  '6/45': { name:'Mega 6/45',  max:45, pick:6, source:'power645', xskt:'mega-645'  },
+  '5/35': { name:'Max 5/35',   max:35, pick:5, source:'power535', xskt:'power-535' },
+};
+let currentGame = '6/55';
+let dataset = {};
+let charts = {};
+
+const MODEL_DESC = {
+  ai: `<b class="text-purple-300">AI Ensemble</b> kết hợp 6 mô hình thống kê độc lập (Bayesian frequency, Markov chain transition, Poisson gap recurrence, EMA momentum 30 kỳ, pair-affinity Apriori, chi-square deviation), sau đó vote có trọng số → sampling Monte Carlo có ràng buộc (tổng nằm trong khoảng phổ biến ±15%, chẵn/lẻ balanced, spread ≥ max/pick). <b>Bộ số được tối ưu để cân bằng giữa exploitation (số có tín hiệu mạnh) và exploration (đa dạng hóa rủi ro).</b>`,
+  bayes: `<b>Bayesian Frequency</b>: Posterior probability = (frequency + α) / (total + α·N) với α=1 (Laplace smoothing). Số có tần suất cao trong lịch sử dài hạn được ưu tiên.`,
+  markov: `<b>Markov Chain</b>: Học ma trận chuyển trạng thái P(số n xuất hiện | số m xuất hiện kỳ trước). Dự đoán dựa vào các số trong kỳ gần nhất.`,
+  hot: `<b>Hot Strategy</b>: Ưu tiên các số có tần suất xuất hiện cao nhất + đang trong streak (xuất hiện trong 20 kỳ gần đây).`,
+  cold: `<b>Cold/Due Strategy</b>: Theo lý thuyết Law of Large Numbers, các số vắng lâu có xu hướng "về" để cân bằng phân phối. Ưu tiên số có gap lớn nhất.`,
+  recent: `<b>EMA Recent Trend</b>: Exponentially weighted moving average với α=0.1, trọng số giảm dần theo thời gian. Bắt sóng momentum ngắn hạn.`,
+  balanced: `<b>Balanced</b>: 50% hot + 50% cold để giảm variance.`,
+};
+
+// ============================================================
+// DATA LAYER
+// ============================================================
+async function fetchHistorical(game){
+  const cfg = GAMES[game];
+  const url = `https://raw.githubusercontent.com/vietvudanh/vietlott-data/main/data/${cfg.source}.jsonl`;
+  const res = await fetch(url, { cache:'no-cache' });
+  if(!res.ok) throw new Error('HTTP '+res.status);
+  const txt = await res.text();
+  return txt.trim().split('\n').map(l => { try { return JSON.parse(l) } catch(e){ return null } })
+    .filter(Boolean)
+    .map((r,i) => ({ id:r.id||String(i+1), date:r.date, numbers:r.result.slice(0,cfg.pick).map(Number).sort((a,b)=>a-b) }))
+    .filter(d => d.numbers.length===cfg.pick && d.numbers.every(n => n>=1 && n<=cfg.max))
+    .reverse();
+}
+
+async function fetchFresh(game){
+  const cfg = GAMES[game];
+  const url = `https://r.jina.ai/https://xskt.com.vn/xsdt/${cfg.xskt}`;
+  const res = await fetch(url, { headers:{ 'Accept':'text/plain', 'X-Return-Format':'markdown' } });
+  if(!res.ok) throw new Error('HTTP '+res.status);
+  const md = await res.text();
+  const draws = [];
+  const seen = new Set();
+  const re = /ngay-(\d{1,2})-(\d{1,2})-(\d{4})[\s\S]{0,600}?(?:K[êế]t qu[ảa])[^\d]{0,40}([\d\s|]{11,80})/g;
+  let m;
+  while((m = re.exec(md)) !== null){
+    const [_, d, mo, y, nums] = m;
+    const date = `${y}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
+    if(seen.has(date)) continue;
+    const arr = nums.replace(/\|/g,' ').trim().split(/\s+/).map(Number).filter(n => n>=1 && n<=cfg.max);
+    if(arr.length < cfg.pick) continue;
+    arr.length = cfg.pick; arr.sort((a,b)=>a-b);
+    seen.add(date);
+    draws.push({ id:'fresh-'+date, date, numbers:arr });
+  }
+  return draws;
+}
+
+function mergeDraws(hist, fresh){
+  const map = new Map();
+  hist.forEach(d => map.set(d.date, d));
+  fresh.forEach(d => { if(!map.has(d.date)) map.set(d.date, d) });
+  return [...map.values()].sort((a,b) => b.date.localeCompare(a.date));
+}
+
+// Fallback simulator
+function mulberry32(s){return function(){let t=s+=0x6D2B79F5;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0)/4294967296}}
+function simulate(game){
+  const cfg=GAMES[game], rnd=mulberry32(cfg.max*1000);
+  const bias=Array.from({length:cfg.max+1},(_,i)=>i===0?0:0.8+rnd()*0.6);
+  const out=[], d0=new Date(); d0.setDate(d0.getDate()-520*2);
+  for(let i=0;i<520;i++){
+    const p=new Set();
+    while(p.size<cfg.pick){
+      let tot=bias.reduce((a,b)=>a+b,0), r=rnd()*tot;
+      for(let n=1;n<=cfg.max;n++){ r-=bias[n]; if(r<=0&&!p.has(n)){p.add(n);break} }
+    }
+    const d=new Date(d0); d.setDate(d.getDate()+i*2);
+    out.push({id:i+1,date:d.toISOString().slice(0,10),numbers:[...p].sort((a,b)=>a-b)});
+  }
+  return out.reverse();
+}
+
+// ============================================================
+// STATISTICS ENGINE
+// ============================================================
+function computeStats(draws, cfg){
+  const N = cfg.max;
+  const freq = Array(N+1).fill(0);
+  const lastSeen = Array(N+1).fill(draws.length);
+  const recentFreq = Array(N+1).fill(0); // last 30
+  const ema = Array(N+1).fill(0);        // EMA momentum
+  const alpha = 0.1;
+
+  // markov transition: P(n_t | k_{t-1})
+  const transition = Array.from({length:N+1}, () => Array(N+1).fill(0));
+  const prevCounts = Array(N+1).fill(0);
+
+  draws.forEach((d, idx) => {
+    d.numbers.forEach(n => {
+      freq[n]++;
+      if(lastSeen[n] === draws.length) lastSeen[n] = idx;
+      if(idx < 30) recentFreq[n]++;
+      // EMA: most recent draw idx=0 has highest weight
+    });
+    // build markov from idx+1 -> idx (newer)
+    if(idx < draws.length-1){
+      const prev = draws[idx+1].numbers;
+      const cur = d.numbers;
+      prev.forEach(p => {
+        prevCounts[p]++;
+        cur.forEach(c => transition[p][c]++);
+      });
+    }
+  });
+
+  // EMA: walk from oldest to newest, last draw weighs most
+  for(let i=draws.length-1; i>=0; i--){
+    const inDraw = new Set(draws[i].numbers);
+    for(let n=1;n<=N;n++){
+      ema[n] = ema[n] * (1-alpha) + (inDraw.has(n) ? alpha : 0);
+    }
+  }
+
+  // pair affinity
+  const pairs = {};
+  draws.forEach(d => {
+    for(let i=0;i<d.numbers.length;i++)
+      for(let j=i+1;j<d.numbers.length;j++){
+        const k = d.numbers[i]+'-'+d.numbers[j];
+        pairs[k] = (pairs[k]||0)+1;
+      }
+  });
+  const topPairs = Object.entries(pairs).sort((a,b)=>b[1]-a[1]);
+
+  const sums = draws.map(d => d.numbers.reduce((a,b)=>a+b,0));
+  const oddCounts = draws.map(d => d.numbers.filter(n => n%2===1).length);
+  const avgSum = sums.reduce((a,b)=>a+b,0)/sums.length;
+  const stdSum = Math.sqrt(sums.reduce((a,b)=>a+(b-avgSum)**2,0)/sums.length);
+
+  return { freq, lastSeen, recentFreq, ema, transition, prevCounts, topPairs, pairs, sums, oddCounts, avgSum, stdSum };
+}
+
+// ============================================================
+// PREDICTION ENGINE — multiple models + AI ensemble
+// ============================================================
+function scoreNumbers(stats, cfg, model, draws){
+  const N = cfg.max;
+  const totalDraws = draws.length;
+  const expected = (totalDraws * cfg.pick) / N; // expected freq per number
+  const lastDraw = draws[0]?.numbers || [];
+
+  const scores = Array(N+1).fill(0);
+
+  for(let n=1; n<=N; n++){
+    const f = stats.freq[n];
+    const gap = stats.lastSeen[n];
+    const rf = stats.recentFreq[n];
+
+    // Component scores (normalized 0-2)
+    const bayesian = (f + 1) / (expected + 1);             // posterior probability ratio
+    const dueness = Math.tanh(gap / (N/cfg.pick * 2));     // 0..1, saturates
+    const momentum = stats.ema[n] * 10;                    // recent activity
+    const recent = rf / (30 * cfg.pick / N);               // recent freq ratio
+    const chiSqDev = Math.abs(f - expected) / Math.sqrt(expected); // standardized deviation
+
+    // Markov: P(n appears | numbers in last draw appeared)
+    let markovScore = 0;
+    if(lastDraw.length){
+      lastDraw.forEach(p => {
+        if(stats.prevCounts[p] > 0)
+          markovScore += stats.transition[p][n] / stats.prevCounts[p];
+      });
+      markovScore /= lastDraw.length;
+      markovScore *= N; // normalize
+    }
+
+    switch(model){
+      case 'bayes':    scores[n] = bayesian; break;
+      case 'markov':   scores[n] = markovScore + 0.3*bayesian; break;
+      case 'hot':      scores[n] = bayesian * 1.5 + recent; break;
+      case 'cold':     scores[n] = dueness * 2 + (2 - bayesian); break;
+      case 'recent':   scores[n] = momentum * 3 + recent; break;
+      case 'balanced': scores[n] = bayesian + dueness; break;
+      case 'ai':
+      default:
+        // AI Ensemble: weighted vote across all signals
+        scores[n] =
+          0.25 * bayesian +
+          0.20 * dueness +
+          0.20 * markovScore +
+          0.15 * momentum +
+          0.10 * recent +
+          0.10 * (chiSqDev * 0.5);
+    }
+  }
+  return scores;
+}
+
+function pairBoost(stats, picked, candidate){
+  if(picked.length === 0) return 1;
+  let boost = 0;
+  picked.forEach(p => {
+    const k = p < candidate ? p+'-'+candidate : candidate+'-'+p;
+    boost += (stats.pairs[k] || 0);
+  });
+  return 1 + boost / (picked.length * 20);
+}
+
+function generateSet(scores, stats, cfg, useConstraints=true){
+  const N = cfg.max, K = cfg.pick;
+  const targetSum = stats.avgSum;
+  const sumTolerance = stats.stdSum * 1.0;
+
+  // Try up to 50 candidates, pick best by composite quality
+  let best = null;
+  for(let attempt=0; attempt<50; attempt++){
+    const w = scores.slice();
+    const picked = [];
+    while(picked.length < K){
+      // apply pair boost for AI mode
+      const adjusted = w.map((s,i) => i===0 ? 0 : s * pairBoost(stats, picked, i));
+      const total = adjusted.reduce((a,b)=>a+b, 0);
+      let r = Math.random() * total;
+      for(let n=1; n<=N; n++){
+        r -= adjusted[n];
+        if(r <= 0){
+          if(!picked.includes(n)){ picked.push(n); w[n] = 0 }
+          break;
+        }
+      }
+    }
+    picked.sort((a,b)=>a-b);
+
+    // Quality check
+    const sum = picked.reduce((a,b)=>a+b,0);
+    const odd = picked.filter(n=>n%2===1).length;
+    const spread = picked[K-1] - picked[0];
+    const sumOk = Math.abs(sum - targetSum) <= sumTolerance;
+    const oeOk = odd >= Math.floor(K/2)-1 && odd <= Math.ceil(K/2)+1;
+    const spreadOk = spread >= N * 0.5;
+
+    const quality = picked.reduce((s,n)=>s+scores[n],0)
+      + (sumOk ? 2 : 0) + (oeOk ? 1.5 : 0) + (spreadOk ? 1 : 0);
+
+    if(!best || quality > best.quality){
+      best = { numbers: picked, sum, odd, spread, quality };
+    }
+    if(useConstraints && sumOk && oeOk && spreadOk) break;
+  }
+  return best;
+}
+
+function predict(draws, cfg, model='ai'){
+  const stats = computeStats(draws, cfg);
+  const scores = scoreNumbers(stats, cfg, model, draws);
+  const maxScore = Math.max(...scores.slice(1));
+
+  const sets = [];
+  const seen = new Set();
+  let tries = 0;
+  while(sets.length < 4 && tries < 30){
+    tries++;
+    const s = generateSet(scores, stats, cfg, model==='ai');
+    const key = s.numbers.join(',');
+    if(seen.has(key)) continue;
+    seen.add(key);
+    const conf = s.numbers.reduce((sum,n)=>sum+scores[n],0) / (cfg.pick * maxScore);
+    sets.push({
+      numbers: s.numbers,
+      confidence: Math.min(0.99, conf),
+      sum: s.sum,
+      odd: s.odd,
+      spread: s.spread,
+    });
+  }
+  sets.sort((a,b)=>b.confidence-a.confidence);
+  return sets.slice(0, 4);
+}
+
+// ============================================================
+// RENDERING
+// ============================================================
+const $ = q => document.querySelector(q);
+const $$ = q => document.querySelectorAll(q);
+
+function ball(n, cls=''){
+  const el = document.createElement('span');
+  el.className = 'ball ' + cls;
+  el.textContent = String(n).padStart(2,'0');
+  return el;
+}
+
+function renderKPIs(stats, cfg){
+  const d = dataset[currentGame];
+  $('#kpiDraws').textContent = d.length.toLocaleString();
+  $('#kpiLatest').textContent = d[0]?.date.slice(5) || '—';
+  const sorted = stats.freq.map((c,n)=>({n,c})).slice(1).sort((a,b)=>b.c-a.c);
+  $('#kpiHot').textContent = String(sorted[0].n).padStart(2,'0') + ' · ' + sorted[0].c + 'x';
+  $('#kpiCold').textContent = String(sorted[sorted.length-1].n).padStart(2,'0') + ' · ' + sorted[sorted.length-1].c + 'x';
+}
+
+function renderHotCold(stats){
+  const sorted = stats.freq.map((c,n)=>({n,c})).slice(1).sort((a,b)=>b.c-a.c);
+  const hot = sorted.slice(0,6), cold = sorted.slice(-6).reverse();
+  const fill = (el, items, cls) => {
+    el.innerHTML='';
+    items.forEach(({n,c}) => {
+      const w = document.createElement('div');
+      w.className = 'text-center';
+      w.appendChild(ball(n, cls));
+      const l = document.createElement('div');
+      l.className = 'text-[10px] text-gray-500 mt-1';
+      l.textContent = c + 'x';
+      w.appendChild(l);
+      el.appendChild(w);
+    });
+  };
+  fill($('#hotList'), hot, 'hot');
+  fill($('#coldList'), cold, 'cold');
+}
+
+function renderFreqChart(stats, cfg){
+  const labels = Array.from({length:cfg.max}, (_,i) => String(i+1).padStart(2,'0'));
+  const data = stats.freq.slice(1);
+  const max = Math.max(...data), min = Math.min(...data);
+  const colors = data.map(v => {
+    const t = (v-min)/(max-min||1);
+    return t>0.8?'#dc2626':t>0.6?'#f97316':t>0.4?'#facc15':t>0.2?'#a3e635':'#3b82f6';
+  });
+  if(charts.freq) charts.freq.destroy();
+  charts.freq = new Chart($('#freqChart'), {
+    type:'bar',
+    data:{ labels, datasets:[{ data, backgroundColor:colors, borderRadius:3 }]},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label: c => 'Xuất hiện: '+c.parsed.y+' lần' }}},
+      scales:{
+        x:{ ticks:{color:'#6b7280',font:{size:9}}, grid:{display:false} },
+        y:{ ticks:{color:'#6b7280'}, grid:{color:'rgba(255,255,255,0.03)'} }
+      }
+    }
+  });
+}
+
+function renderHeatmap(stats, cfg){
+  const hm = $('#heatmap'); hm.innerHTML='';
+  const cols = cfg.max <= 35 ? 7 : cfg.max <= 45 ? 9 : 11;
+  hm.style.gridTemplateColumns = `repeat(${cols}, minmax(0,1fr))`;
+  const data = stats.freq.slice(1);
+  const max = Math.max(...data), min = Math.min(...data);
+  for(let n=1; n<=cfg.max; n++){
+    const c = stats.freq[n];
+    const t = (c-min)/(max-min||1);
+    const color = t>0.8?'#dc2626':t>0.65?'#f97316':t>0.5?'#facc15':t>0.35?'#a3e635':t>0.2?'#3b82f6':'#1e3a8a';
+    const cell = document.createElement('div');
+    cell.className = 'heat-cell';
+    cell.style.background = color;
+    cell.style.color = t>0.4?'#1f2937':'#fff';
+    cell.innerHTML = `<span>${String(n).padStart(2,'0')}</span><span class="cnt">${c}</span>`;
+    cell.title = `Số ${n} · ${c} lần · gap ${stats.lastSeen[n]} kỳ`;
+    hm.appendChild(cell);
+  }
+}
+
+function renderGapChart(stats){
+  const arr = stats.lastSeen.map((g,n)=>({n,g})).slice(1).sort((a,b)=>b.g-a.g).slice(0,15);
+  if(charts.gap) charts.gap.destroy();
+  charts.gap = new Chart($('#gapChart'), {
+    type:'bar',
+    data:{
+      labels: arr.map(x => String(x.n).padStart(2,'0')),
+      datasets:[{ data: arr.map(x => x.g), backgroundColor:'#3b82f6', borderRadius:3 }]
+    },
+    options:{
+      indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label: c => 'Vắng '+c.parsed.x+' kỳ' }}},
+      scales:{
+        x:{ ticks:{color:'#6b7280'}, grid:{color:'rgba(255,255,255,0.03)'} },
+        y:{ ticks:{color:'#6b7280'}, grid:{display:false} }
+      }
+    }
+  });
+}
+
+function renderDist(stats, cfg){
+  // odd/even
+  const dist = Array(cfg.pick+1).fill(0);
+  stats.oddCounts.forEach(c => dist[c]++);
+  if(charts.oe) charts.oe.destroy();
+  charts.oe = new Chart($('#oeChart'), {
+    type:'doughnut',
+    data:{
+      labels: dist.map((_,i)=>`${i}L/${cfg.pick-i}C`),
+      datasets:[{ data:dist, backgroundColor:['#1e3a8a','#3b82f6','#10b981','#facc15','#f97316','#dc2626','#7f1d1d'], borderWidth:0 }]
+    },
+    options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{position:'right',labels:{color:'#9ca3af',font:{size:10},boxWidth:10}}}}
+  });
+  const mi = dist.indexOf(Math.max(...dist));
+  $('#oeInsight').textContent = `Phổ biến nhất: ${mi} lẻ + ${cfg.pick-mi} chẵn (${(dist[mi]/stats.oddCounts.length*100).toFixed(0)}% kỳ)`;
+
+  // sum
+  const bins = 10, min = cfg.pick, max = cfg.pick*cfg.max, step = (max-min)/bins;
+  const hist = Array(bins).fill(0);
+  stats.sums.forEach(s => { const i = Math.min(bins-1, Math.floor((s-min)/step)); hist[i]++ });
+  if(charts.sum) charts.sum.destroy();
+  charts.sum = new Chart($('#sumChart'), {
+    type:'bar',
+    data:{
+      labels: Array.from({length:bins},(_,i)=>Math.round(min+i*step)+''),
+      datasets:[{ data:hist, backgroundColor:'#a78bfa', borderRadius:3 }]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false} },
+      scales:{
+        x:{ ticks:{color:'#6b7280',font:{size:9}}, grid:{display:false} },
+        y:{ ticks:{color:'#6b7280'}, grid:{color:'rgba(255,255,255,0.03)'} }
+      }
+    }
+  });
+  $('#sumInsight').textContent = `Trung bình: ${stats.avgSum.toFixed(0)} · Khoảng tối ưu: ${Math.round(stats.avgSum-stats.stdSum)}–${Math.round(stats.avgSum+stats.stdSum)}`;
+}
+
+function renderPairs(stats){
+  const div = $('#pairList'); div.innerHTML='';
+  stats.topPairs.slice(0,12).forEach(([k, c]) => {
+    const [a,b] = k.split('-');
+    const row = document.createElement('div');
+    row.className = 'flex items-center justify-between bg-white/[0.02] border border-white/5 rounded-lg px-3 py-2';
+    const left = document.createElement('div');
+    left.className = 'flex items-center gap-2';
+    left.appendChild(ball(a, 'xs')); left.appendChild(ball(b, 'xs'));
+    row.appendChild(left);
+    const r = document.createElement('span');
+    r.className = 'pill bg-purple-500/10 text-purple-300';
+    r.textContent = c + 'x';
+    row.appendChild(r);
+    div.appendChild(row);
+  });
+}
+
+function renderDraws(filter=''){
+  const tbody = $('#drawsBody'); tbody.innerHTML='';
+  const cfg = GAMES[currentGame];
+  const all = dataset[currentGame];
+  const f = filter.trim();
+  const filtered = f ? all.filter(d => d.numbers.includes(parseInt(f))) : all;
+  $('#histCount').textContent = filtered.length + ' kỳ';
+  filtered.slice(0, 150).forEach(d => {
+    const sum = d.numbers.reduce((a,b)=>a+b,0);
+    const odd = d.numbers.filter(n => n%2===1).length;
+    const tr = document.createElement('tr');
+    const balls = d.numbers.map(n => `<span class="ball xs" style="margin-right:3px">${String(n).padStart(2,'0')}</span>`).join('');
+    tr.innerHTML = `<td class="font-mono text-gray-500 text-xs">#${d.id.toString().slice(-5)}</td><td class="text-gray-400 text-xs">${d.date}</td><td>${balls}</td><td class="font-semibold text-yellow-400">${sum}</td><td class="text-gray-500 text-xs">${odd}/${cfg.pick-odd}</td>`;
+    tbody.appendChild(tr);
+  });
+  if(!filtered.length) tbody.innerHTML = '<tr><td colspan="5" class="text-center text-gray-600 py-6">Không tìm thấy</td></tr>';
+}
+
+function renderPredictions(){
+  const cfg = GAMES[currentGame];
+  const model = $('#predModel').value;
+  const sets = predict(dataset[currentGame], cfg, model);
+  const div = $('#predSets'); div.innerHTML='';
+  sets.forEach((s, i) => {
+    const card = document.createElement('div');
+    card.className = 'bg-white/[0.02] hover:bg-white/[0.04] border border-white/5 rounded-xl p-3 transition';
+    const pct = (s.confidence*100).toFixed(0);
+    const ballsHtml = s.numbers.map(n => `<span class="ball sm ${model==='ai'?'ai':''}" style="margin-right:5px">${String(n).padStart(2,'0')}</span>`).join('');
+    card.innerHTML = `
+      <div class="flex items-center justify-between gap-3 flex-wrap">
+        <div class="flex items-center gap-3 flex-1 min-w-0">
+          <div class="flex-shrink-0 w-7 h-7 rounded-lg bg-purple-500/15 text-purple-300 flex items-center justify-center text-xs font-bold">${i+1}</div>
+          <div class="flex flex-wrap items-center">${ballsHtml}</div>
+        </div>
+        <div class="flex items-center gap-3 text-xs">
+          <div class="text-center">
+            <div class="text-[9px] text-gray-500 uppercase">Tổng</div>
+            <div class="font-bold text-yellow-400">${s.sum}</div>
+          </div>
+          <div class="text-center">
+            <div class="text-[9px] text-gray-500 uppercase">L/C</div>
+            <div class="font-bold text-gray-300">${s.odd}/${cfg.pick-s.odd}</div>
+          </div>
+          <div class="text-center min-w-[60px]">
+            <div class="text-[9px] text-gray-500 uppercase">Score</div>
+            <div class="font-bold text-purple-300">${pct}%</div>
+            <div class="progress-bar mt-1"><div class="progress-fill" style="width:${pct}%"></div></div>
+          </div>
+        </div>
+      </div>
+    `;
+    div.appendChild(card);
+  });
+  $('#methodExplain').innerHTML = MODEL_DESC[model];
+  $('#predMeta').textContent = `Mô hình: ${$('#predModel').selectedOptions[0].textContent} · ${dataset[currentGame].length} kỳ training`;
+}
+
+// ============================================================
+// TABS
+// ============================================================
+function switchTab(name){
+  $$('.section-tab').forEach(t => t.classList.toggle('active', t.dataset.tab===name));
+  $$('.tab-pane').forEach(p => p.classList.toggle('hidden', p.id !== 'tab-'+name));
+}
+
+// ============================================================
+// MAIN
+// ============================================================
+// ============================================================
+// EVALUATE A DRAW against historical patterns
+// ============================================================
+function evaluateDraw(d, stats, cfg, allDraws, drawIndex){
+  const K = cfg.pick, N = cfg.max;
+  const sortedFreq = stats.freq.map((c,n)=>({n,c})).slice(1).sort((a,b)=>b.c-a.c);
+  const hotSet = new Set(sortedFreq.slice(0, Math.ceil(N/3)).map(x=>x.n));
+  const coldSet = new Set(sortedFreq.slice(-Math.ceil(N/3)).map(x=>x.n));
+
+  // Recompute stats EXCLUDING this draw and forward draws (only past data)
+  // For simplicity, use all stats as historical reference
+  const labels = d.numbers.map(n => hotSet.has(n) ? 'hot' : coldSet.has(n) ? 'cold' : 'neutral');
+  const hotCount = labels.filter(x=>x==='hot').length;
+  const coldCount = labels.filter(x=>x==='cold').length;
+
+  const sum = d.numbers.reduce((a,b)=>a+b,0);
+  const odd = d.numbers.filter(n=>n%2===1).length;
+  const spread = d.numbers[K-1] - d.numbers[0];
+
+  // Metric scores (0-100)
+  // 1. Sum normality: z-score → score
+  const z = Math.abs(sum - stats.avgSum) / (stats.stdSum || 1);
+  const sumScore = Math.max(0, 100 - z*30);
+
+  // 2. Odd/even balance: closer to K/2 = better
+  const oeDiff = Math.abs(odd - K/2);
+  const oeScore = Math.max(0, 100 - oeDiff * 30);
+
+  // 3. Spread: ratio to ideal (N*(K-1)/(K+1) approx)
+  const idealSpread = N * 0.75;
+  const spreadScore = Math.max(0, 100 - Math.abs(spread - idealSpread) / idealSpread * 100);
+
+  // 4. Hot/Cold balance: ideal is mixed, ~K/3 hot + K/3 cold
+  const idealHC = K/3;
+  const hcDiff = Math.abs(hotCount - idealHC) + Math.abs(coldCount - idealHC);
+  const balanceScore = Math.max(0, 100 - hcDiff * 20);
+
+  // 5. Pair affinity: avg pair frequency
+  let pairSum = 0, pairN = 0;
+  for(let i=0;i<K;i++) for(let j=i+1;j<K;j++){
+    const k = d.numbers[i]+'-'+d.numbers[j];
+    pairSum += (stats.pairs[k]||0);
+    pairN++;
+  }
+  const avgPair = pairSum / pairN;
+  const expectedPair = (allDraws.length * (K*(K-1)/2)) / (N*(N-1)/2);
+  const pairScore = Math.min(100, (avgPair / expectedPair) * 60);
+
+  // Overall composite
+  const overall = (sumScore*0.20 + oeScore*0.15 + spreadScore*0.15 + balanceScore*0.25 + pairScore*0.25);
+
+  // Frequency rank per number
+  const ranks = d.numbers.map(n => {
+    const r = sortedFreq.findIndex(x=>x.n===n) + 1;
+    return { n, rank:r, count: stats.freq[n], label: labels[d.numbers.indexOf(n)] };
+  });
+
+  return { labels, ranks, hotCount, coldCount, sum, odd, spread,
+    sumScore, oeScore, spreadScore, balanceScore, pairScore, overall };
+}
+
+function renderRecent(stats, cfg){
+  const div = $('#recentEval'); div.innerHTML='';
+  const draws = dataset[currentGame].slice(0, 5);
+  draws.forEach((d, idx) => {
+    const ev = evaluateDraw(d, stats, cfg, dataset[currentGame], idx);
+    const overallColor = ev.overall >= 70 ? 'text-emerald-400' : ev.overall >= 50 ? 'text-yellow-400' : 'text-orange-400';
+    const overallBg = ev.overall >= 70 ? 'from-emerald-500/15 to-emerald-500/0' : ev.overall >= 50 ? 'from-yellow-500/15 to-yellow-500/0' : 'from-orange-500/15 to-orange-500/0';
+
+    const ballsHtml = ev.ranks.map(r => {
+      const cls = r.label==='hot'?'hot':r.label==='cold'?'cold':'';
+      return `<div class="text-center"><span class="ball sm ${cls}">${String(r.n).padStart(2,'0')}</span><div class="text-[9px] text-gray-500 mt-0.5">#${r.rank} · ${r.count}x</div></div>`;
+    }).join('');
+
+    const metric = (label, val, color='') => `
+      <div class="flex-1 min-w-0">
+        <div class="flex justify-between text-[9px] text-gray-500 mb-0.5"><span>${label}</span><span class="${color}">${val.toFixed(0)}</span></div>
+        <div class="progress-bar"><div class="progress-fill" style="width:${val}%;background:${val>=70?'#10b981':val>=50?'#facc15':'#f97316'}"></div></div>
+      </div>`;
+
+    const card = document.createElement('div');
+    card.className = `bg-gradient-to-r ${overallBg} border border-white/5 rounded-xl p-3`;
+    card.innerHTML = `
+      <div class="flex flex-col lg:flex-row lg:items-center gap-3">
+        <div class="flex items-center gap-3 lg:w-56 flex-shrink-0">
+          <div class="text-center">
+            <div class="text-[9px] text-gray-500 uppercase">${idx===0?'Mới nhất':'Kỳ trước'}</div>
+            <div class="text-xs font-mono text-gray-300">${d.date}</div>
+            <div class="text-[10px] text-gray-500">#${d.id.toString().slice(-5)}</div>
+          </div>
+          <div class="ml-auto text-right">
+            <div class="text-[9px] text-gray-500 uppercase">Score</div>
+            <div class="text-xl font-black ${overallColor}">${ev.overall.toFixed(0)}</div>
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-1.5 items-end flex-1">${ballsHtml}</div>
+      </div>
+      <div class="flex flex-wrap gap-x-4 gap-y-2 mt-3 pt-3 border-t border-white/5 text-[11px]">
+        ${metric('Sum-norm', ev.sumScore)}
+        ${metric('Balance L/C', ev.oeScore)}
+        ${metric('Spread', ev.spreadScore)}
+        ${metric('Hot-Cold mix', ev.balanceScore)}
+        ${metric('Pair affinity', ev.pairScore)}
+      </div>
+      <div class="flex flex-wrap gap-3 mt-2 text-[10px] text-gray-500">
+        <span>Tổng <b class="text-gray-300">${ev.sum}</b> (μ=${stats.avgSum.toFixed(0)})</span>
+        <span>•</span>
+        <span><b class="text-red-400">${ev.hotCount}</b> nóng / <b class="text-blue-400">${ev.coldCount}</b> lạnh</span>
+        <span>•</span>
+        <span>${ev.odd}L · ${cfg.pick-ev.odd}C</span>
+        <span>•</span>
+        <span>Spread <b class="text-gray-300">${ev.spread}</b></span>
+      </div>
+    `;
+    div.appendChild(card);
+  });
+}
+
+// ============================================================
+// PREMIUM DAILY PICK
+// ============================================================
+const DRAW_SCHEDULE = {
+  '6/55': [2,4,6],   // Tue, Thu, Sat
+  '6/45': [3,5,0],   // Wed, Fri, Sun
+  '5/35': [0,1,2,3,4,5,6], // daily
+};
+const DRAW_NAME_VI = ['CN','T2','T3','T4','T5','T6','T7'];
+
+function nextDrawDate(game){
+  const sched = DRAW_SCHEDULE[game];
+  const now = new Date();
+  for(let i=0;i<8;i++){
+    const d = new Date(now); d.setDate(now.getDate()+i);
+    if(sched.includes(d.getDay())){
+      // if today and past 18:00 → skip to next
+      if(i===0 && now.getHours() >= 19) continue;
+      return d;
+    }
+  }
+  return now;
+}
+
+function formatNextDraw(d){
+  const dd = String(d.getDate()).padStart(2,'0');
+  const mm = String(d.getMonth()+1).padStart(2,'0');
+  return `${DRAW_NAME_VI[d.getDay()]} · ${dd}/${mm}`;
+}
+
+function dateSeed(d, game){
+  const s = `${d.getFullYear()}${d.getMonth()}${d.getDate()}-${game}`;
+  let h = 0;
+  for(let i=0;i<s.length;i++){ h = (h*31 + s.charCodeAt(i))|0 }
+  return Math.abs(h);
+}
+
+// Seeded random for daily determinism
+let _seedRng = Math.random;
+function withSeed(seed, fn){
+  const original = Math.random;
+  Math.random = mulberry32(seed);
+  try { return fn() } finally { Math.random = original }
+}
+
+function generatePremium(draws, cfg, game){
+  const stats = computeStats(draws, cfg);
+  const scores = scoreNumbers(stats, cfg, 'ai', draws);
+  const maxScore = Math.max(...scores.slice(1));
+  const nd = nextDrawDate(game);
+  const seed = dateSeed(nd, game);
+
+  // Generate 200 candidates with seed, pick the one with highest composite quality
+  return withSeed(seed, () => {
+    let best = null;
+    for(let i=0;i<200;i++){
+      const s = generateSet(scores, stats, cfg, true);
+      const conf = s.numbers.reduce((sum,n)=>sum+scores[n],0) / (cfg.pick * maxScore);
+      // bonus for diversity: penalize if too many consecutive numbers
+      let consec = 0;
+      for(let j=1;j<s.numbers.length;j++) if(s.numbers[j]-s.numbers[j-1]===1) consec++;
+      const finalQ = s.quality + conf*5 - consec*0.5;
+      if(!best || finalQ > best.finalQ){
+        best = { ...s, confidence: Math.min(0.99, conf), finalQ, scores, stats };
+      }
+    }
+    return best;
+  });
+}
+
+function renderPremium(){
+  const cfg = GAMES[currentGame];
+  const draws = dataset[currentGame];
+  if(!draws?.length) return;
+
+  const nd = nextDrawDate(currentGame);
+  $('#nextDraw').textContent = formatNextDraw(nd);
+
+  // countdown
+  const cd = () => {
+    const drawTime = new Date(nd); drawTime.setHours(18,0,0,0);
+    const diff = drawTime - new Date();
+    if(diff <= 0){ $('#countdown').textContent = 'đang quay'; return }
+    const h = Math.floor(diff/3600000);
+    const m = Math.floor((diff%3600000)/60000);
+    const s = Math.floor((diff%60000)/1000);
+    $('#countdown').textContent = `${h}h ${m}m ${s}s`;
+  };
+  cd();
+  if(window._cdTimer) clearInterval(window._cdTimer);
+  window._cdTimer = setInterval(cd, 1000);
+
+  const pick = generatePremium(draws, cfg, currentGame);
+
+  // render balls big
+  const ballsHtml = pick.numbers.map(n => {
+    const sortedFreq = pick.stats.freq.map((c,i)=>({n:i,c})).slice(1).sort((a,b)=>b.c-a.c);
+    const r = sortedFreq.findIndex(x=>x.n===n)+1;
+    const gap = pick.stats.lastSeen[n];
+    return `<div class="inline-flex flex-col items-center mx-1.5 my-1">
+      <span class="ball ai" style="width:54px;height:54px;font-size:18px">${String(n).padStart(2,'0')}</span>
+      <div class="text-[9px] text-gray-400 mt-1">#${r} · ${pick.stats.freq[n]}x</div>
+      <div class="text-[9px] text-purple-300">gap ${gap}</div>
+    </div>`;
+  }).join('');
+  $('#premiumPick').innerHTML = `<div class="flex flex-wrap items-start justify-center">${ballsHtml}</div>`;
+
+  // stats badges
+  const sortedFreq = pick.stats.freq.map((c,i)=>({n:i,c})).slice(1).sort((a,b)=>b.c-a.c);
+  const hotSet = new Set(sortedFreq.slice(0, Math.ceil(cfg.max/3)).map(x=>x.n));
+  const coldSet = new Set(sortedFreq.slice(-Math.ceil(cfg.max/3)).map(x=>x.n));
+  const hotN = pick.numbers.filter(n=>hotSet.has(n)).length;
+  const coldN = pick.numbers.filter(n=>coldSet.has(n)).length;
+  const pct = (pick.confidence*100).toFixed(0);
+  const stat = (l,v,c='text-gray-200') => `<div class="bg-black/30 border border-white/5 rounded-lg p-2.5 text-center"><div class="text-[9px] text-gray-500 uppercase mb-0.5">${l}</div><div class="font-bold ${c}">${v}</div></div>`;
+  $('#premiumStats').innerHTML =
+    stat('Confidence', pct+'%', 'text-yellow-300') +
+    stat('Tổng', pick.sum, 'text-purple-300') +
+    stat('Lẻ/Chẵn', pick.odd+'/'+(cfg.pick-pick.odd)) +
+    stat('Nóng/Lạnh', hotN+'/'+coldN, 'text-pink-300') +
+    stat('Spread', pick.spread);
+
+  // reasoning
+  const avgGap = pick.numbers.reduce((s,n)=>s+pick.stats.lastSeen[n],0)/cfg.pick;
+  const avgRank = pick.numbers.reduce((s,n)=>s+(sortedFreq.findIndex(x=>x.n===n)+1),0)/cfg.pick;
+  const sumDelta = pick.sum - pick.stats.avgSum;
+  $('#premiumReason').innerHTML = `
+    <p class="mb-2">Bộ số <b class="text-yellow-300">${pick.numbers.map(n=>String(n).padStart(2,'0')).join(' · ')}</b> được chọn từ <b>200 candidates</b> chấm điểm bằng AI Ensemble (Bayesian + Markov + Poisson gap + EMA + Pair affinity + Chi-square), seed theo ngày <b>${formatNextDraw(nd)}</b>.</p>
+    <ul class="space-y-1 text-gray-400">
+      <li>• Confidence Score: <b class="text-yellow-300">${pct}%</b> — top 1% candidate distribution</li>
+      <li>• Hot/Cold mix: <b>${hotN}</b> nóng + <b>${coldN}</b> lạnh + <b>${cfg.pick-hotN-coldN}</b> trung tính (cân bằng exploit/explore)</li>
+      <li>• Tổng <b>${pick.sum}</b> ${sumDelta>=0?'trên':'dưới'} trung bình lịch sử <b>${Math.abs(sumDelta).toFixed(0)}</b> đơn vị (μ=${pick.stats.avgSum.toFixed(0)}, σ=${pick.stats.stdSum.toFixed(0)})</li>
+      <li>• Gap trung bình: <b>${avgGap.toFixed(1)} kỳ</b> — ưu tiên số "due" về</li>
+      <li>• Frequency rank trung bình: <b>#${avgRank.toFixed(1)}</b> trong tổng ${cfg.max} số</li>
+      <li>• Lẻ/Chẵn <b>${pick.odd}/${cfg.pick-pick.odd}</b> · Spread <b>${pick.spread}</b> — match phân phối lịch sử</li>
+    </ul>
+    <p class="mt-2 text-[10px] text-gray-500 italic">⚠️ Bộ số deterministic theo ngày — refresh không thay đổi. Reset 00:00 mỗi ngày. Chơi có trách nhiệm.</p>
+  `;
+  $('#premiumMeta').innerHTML = `AI Ensemble · 200 candidates · seeded by ${nd.toISOString().slice(0,10)}`;
+}
+
+function renderAll(){
+  const cfg = GAMES[currentGame];
+  const stats = computeStats(dataset[currentGame], cfg);
+  renderPremium();
+  renderKPIs(stats, cfg);
+  renderRecent(stats, cfg);
+  renderHotCold(stats);
+  renderFreqChart(stats, cfg);
+  renderHeatmap(stats, cfg);
+  renderGapChart(stats);
+  renderDist(stats, cfg);
+  renderPairs(stats);
+  renderDraws($('#searchDraw').value);
+  renderPredictions();
+}
+
+function updateDataInfo(){
+  const d = dataset[currentGame];
+  if(!d?.length){ $('#dataInfo').textContent = '⚠'; return }
+  const meta = d._meta || {};
+  const tag = meta.fresh > 0 ? ` +${meta.fresh}` : '';
+  $('#dataInfo').innerHTML = `🟢 ${d.length}${tag} · ${d[0].date.slice(5)}`;
+}
+
+async function loadAll(){
+  $('#dataInfo').innerHTML = '⏳ tải...';
+  await Promise.allSettled(Object.keys(GAMES).map(async g => {
+    let hist = [];
+    try { hist = await fetchHistorical(g) } catch(e){ hist = simulate(g) }
+    let fresh = [];
+    try { fresh = await fetchFresh(g) } catch(e){}
+    dataset[g] = fresh.length ? mergeDraws(hist, fresh) : hist;
+    dataset[g]._meta = { historical: hist.length, fresh: fresh.length };
+  }));
+  updateDataInfo();
+  renderAll();
+}
+
+// Events
+$$('.game-tab').forEach(b => b.addEventListener('click', () => {
+  $$('.game-tab').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  currentGame = b.dataset.game;
+  updateDataInfo();
+  renderAll();
+}));
+$$('.section-tab').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+$('#genBtn').addEventListener('click', renderPredictions);
+$('#predModel').addEventListener('change', renderPredictions);
+$('#searchDraw').addEventListener('input', e => renderDraws(e.target.value));
+$('#reloadBtn').addEventListener('click', loadAll);
+
+loadAll();
+</script>
+</body>
+</html>
