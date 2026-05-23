@@ -152,6 +152,18 @@
     <div id="recentEval" class="space-y-2.5"></div>
   </div>
 
+  <!-- BACKTEST AGGREGATE STATS -->
+  <div class="card p-5 mb-5">
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+      <div>
+        <h3 class="font-semibold text-sm">📊 Backtest accuracy · <span id="bsRange" class="text-purple-300">— kỳ</span></h3>
+        <p class="text-[11px] text-gray-500 mt-0.5">Đánh giá AI Ensemble trên N kỳ gần nhất — calibrate kỳ vọng thực tế</p>
+      </div>
+      <button id="bsRun" class="pill bg-purple-500/15 text-purple-300 border border-purple-500/30 hover:bg-purple-500/25">🔄 Tính lại</button>
+    </div>
+    <div id="bsContent" class="text-center py-4 text-xs text-gray-500">Đang tính toán...</div>
+  </div>
+
   <footer class="text-center text-[11px] text-gray-600 py-4">
     <p>Dữ liệu: vietvudanh/vietlott-data + xskt.com.vn (live). Xổ số là trò chơi may rủi.</p>
   </footer>
@@ -432,8 +444,28 @@ function _computeStatsImpl(draws, cfg){
   const avgSum = sums.reduce((a,b)=>a+b,0)/sums.length;
   const stdSum = Math.sqrt(sums.reduce((a,b)=>a+(b-avgSum)**2,0)/sums.length);
 
+  // Decade distribution: count numbers per 10-block, expected per draw
+  const DEC = Math.ceil(N/10);
+  const decadeMean = Array(DEC).fill(0);
+  draws.forEach(d => {
+    d.numbers.forEach(n => decadeMean[Math.min(DEC-1, Math.floor((n-1)/10))]++);
+  });
+  for(let i=0;i<DEC;i++) decadeMean[i] /= draws.length;
+
+  // Prime numbers count per draw
+  const PRIMES = new Set(); for(let p=2; p<=N; p++){ let pr=true; for(let i=2;i*i<=p;i++) if(p%i===0){pr=false;break} if(pr) PRIMES.add(p) }
+  const primeCounts = draws.map(d => d.numbers.filter(n => PRIMES.has(n)).length);
+  const avgPrime = primeCounts.reduce((a,b)=>a+b,0)/primeCounts.length;
+  const stdPrime = Math.sqrt(primeCounts.reduce((a,b)=>a+(b-avgPrime)**2,0)/primeCounts.length);
+
+  // Digit-sum (sum of all digits across numbers)
+  const digitSums = draws.map(d => d.numbers.reduce((s,n) => s + String(n).split('').reduce((a,c)=>a+Number(c),0), 0));
+  const avgDigitSum = digitSums.reduce((a,b)=>a+b,0)/digitSums.length;
+  const stdDigitSum = Math.sqrt(digitSums.reduce((a,b)=>a+(b-avgDigitSum)**2,0)/digitSums.length);
+
   return { freq, lastSeen, recentFreq, ema, transition, prevCounts, topPairs, pairs, sums, oddCounts, avgSum, stdSum,
-    bonusFreq, bonusLastSeen, bonusTotal };
+    bonusFreq, bonusLastSeen, bonusTotal,
+    decadeMean, PRIMES, avgPrime, stdPrime, avgDigitSum, stdDigitSum };
 }
 
 // ============================================================
@@ -530,18 +562,23 @@ function computeQuality(picked, scores, stats, cfg){
   if(spreadRatio >= 0.6) q += 1.0;
   else q -= (0.6 - spreadRatio) * 2.5;
 
-  // 5. Anti-clustering: penalty nếu 3+ số cùng decade (1-10, 11-20, ...)
-  const decades = {};
-  picked.forEach(n => { const d = Math.floor((n-1)/10); decades[d] = (decades[d]||0) + 1 });
-  const maxCluster = Math.max(...Object.values(decades));
-  if(maxCluster >= 3) q -= 1.5 * (maxCluster - 2);
+  // 5. Decade balance: match historical distribution thay vì chỉ anti-cluster cứng
+  const DEC = stats.decadeMean.length;
+  const decadeCount = Array(DEC).fill(0);
+  picked.forEach(n => decadeCount[Math.min(DEC-1, Math.floor((n-1)/10))]++);
+  let decadeChi = 0;
+  for(let i=0;i<DEC;i++){
+    const exp = stats.decadeMean[i] || 0.01;
+    decadeChi += Math.pow(decadeCount[i] - exp, 2) / exp;
+  }
+  q -= 0.35 * decadeChi; // càng gần expected càng tốt
 
-  // 6. Anti-consecutive: penalty cho số liên tiếp (≥2 cặp adjacent là không tự nhiên)
+  // 6. Anti-consecutive: penalty cho số liên tiếp
   let consec = 0;
   for(let i=1; i<picked.length; i++) if(picked[i] - picked[i-1] === 1) consec++;
   q -= consec * 0.4;
 
-  // 7. Pair affinity: log-scaled bonus cho các cặp xuất hiện cùng nhau nhiều trong lịch sử
+  // 7. Pair affinity: log-scaled
   let pairScore = 0;
   for(let i=0; i<K; i++) for(let j=i+1; j<K; j++){
     const k = picked[i] + '-' + picked[j];
@@ -549,6 +586,20 @@ function computeQuality(picked, scores, stats, cfg){
   }
   const expectedPairTotal = stats.sums.length * (K*(K-1)/2) * (K*(K-1)) / (N*(N-1));
   q += 0.6 * Math.log(1 + pairScore / Math.max(1, expectedPairTotal));
+
+  // 8. Prime count match: Gaussian quanh historical avg
+  const primeCount = picked.filter(n => stats.PRIMES.has(n)).length;
+  const primeZ = (primeCount - stats.avgPrime) / Math.max(stats.stdPrime, 0.5);
+  q += 0.8 * Math.exp(-primeZ*primeZ/2);
+
+  // 9. Final-digit diversity: bonus cho 0-9 đa dạng (max K distinct digits)
+  const lastDigits = new Set(picked.map(n => n%10));
+  q += 0.3 * (lastDigits.size / K);
+
+  // 10. Digit-sum near historical μ
+  const digitSum = picked.reduce((s,n) => s + String(n).split('').reduce((a,c)=>a+Number(c),0), 0);
+  const dsZ = (digitSum - stats.avgDigitSum) / Math.max(stats.stdDigitSum, 1);
+  q += 0.5 * Math.exp(-dsZ*dsZ/2);
 
   return { quality:q, sum, odd, spread };
 }
@@ -629,7 +680,7 @@ function ball(n, cls=''){
 
 
 // Prediction cache — Supabase (L2 persistent) + localStorage (L1 fast)
-const PRED_CACHE_VERSION = 'v8'; // v8: 5/35 multi-draw/day (13h+21h) — uniqueKey = date_time
+const PRED_CACHE_VERSION = 'v9'; // v9: quality signals (decade chi², prime count, digit-sum, last-digit diversity) + backtest stats
 const SUPABASE_URL = 'https://bfstkfcuhomtetedexmq.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_C7422FmsYC23Bwh5ti_5xg_5LuV8GF7';
 const SB_HEADERS = { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY };
@@ -1036,11 +1087,111 @@ function renderPremium(){
   $('#premiumMeta').innerHTML = `AI Ensemble · 🔒 locked ${lockedAt} · algo ${PRED_CACHE_VERSION}`;
 }
 
+// Backtest aggregate trên N kỳ gần nhất → realistic accuracy stats
+function renderBacktestStats(cfg){
+  const N_DRAWS = 30;
+  const all = dataset[currentGame];
+  const sample = all.slice(0, Math.min(N_DRAWS, all.length - 30)); // cần >=30 kỳ làm past
+  if(sample.length < 5){
+    $('#bsContent').innerHTML = '<div class="text-gray-500">Không đủ data để backtest</div>';
+    return;
+  }
+  $('#bsRange').textContent = sample.length + ' kỳ';
+  const hits = [];        // số trúng main mỗi kỳ
+  const bonusHits = [];   // bonus trúng (0/1)
+  for(let i=0; i<sample.length; i++){
+    const pred = backtestPredict(i, cfg, currentGame);
+    if(!pred) continue;
+    const actual = new Set(sample[i].numbers);
+    const mainHit = pred.numbers.filter(n => actual.has(n)).length;
+    hits.push(mainHit);
+    if(cfg.bonus && pred.bonus){
+      bonusHits.push(sample[i].bonus === pred.bonus ? 1 : 0);
+    }
+  }
+  if(!hits.length){ $('#bsContent').innerHTML = '<div class="text-gray-500">Không đủ predictions</div>'; return }
+
+  const sum = hits.reduce((a,b)=>a+b,0);
+  const mean = sum / hits.length;
+  const variance = hits.reduce((a,b)=>a+(b-mean)**2,0) / hits.length;
+  const std = Math.sqrt(variance);
+  const expected = (cfg.pick * cfg.pick) / cfg.max; // baseline random hits expected
+  const ratio = mean / expected;
+  const max = Math.max(...hits);
+  const min = Math.min(...hits);
+
+  // Distribution histogram
+  const dist = Array(cfg.pick + 1).fill(0);
+  hits.forEach(h => dist[h]++);
+  const totalH = hits.length;
+  const distBars = dist.map((c, h) => {
+    const pct = (c/totalH*100).toFixed(0);
+    const w = (c/totalH*100).toFixed(1);
+    const isMax = c > 0 && c === Math.max(...dist);
+    return `<div class="flex items-center gap-2 text-[11px]">
+      <span class="text-gray-400 w-12">${h}/${cfg.pick}:</span>
+      <div class="flex-1 bg-white/[0.03] rounded overflow-hidden h-4 relative">
+        <div class="absolute inset-y-0 left-0 ${isMax?'bg-gradient-to-r from-purple-500 to-pink-500':'bg-purple-500/40'}" style="width:${w}%"></div>
+      </div>
+      <span class="text-gray-300 w-12 text-right">${c} (${pct}%)</span>
+    </div>`;
+  }).join('');
+
+  const bonusInfo = (cfg.bonus && bonusHits.length)
+    ? `<div class="bg-yellow-500/5 border border-yellow-500/20 rounded-lg p-3 mt-3">
+        <div class="text-[10px] text-gray-500 uppercase mb-1">${cfg.bonusLabel} accuracy</div>
+        <div class="font-bold text-yellow-300">${bonusHits.reduce((a,b)=>a+b,0)}/${bonusHits.length} kỳ trúng (${(bonusHits.reduce((a,b)=>a+b,0)/bonusHits.length*100).toFixed(1)}%)</div>
+        <div class="text-[10px] text-gray-500 mt-0.5">Baseline random: ${(100/cfg.bonusMax).toFixed(1)}%</div>
+      </div>`
+    : '';
+
+  const ratioColor = ratio >= 1.2 ? 'text-emerald-400' : ratio >= 1.0 ? 'text-yellow-300' : 'text-orange-400';
+  const verdict = ratio >= 1.5 ? '🎯 Tốt hơn random đáng kể'
+                : ratio >= 1.1 ? '✓ Hơi tốt hơn random (có thể do variance)'
+                : ratio >= 0.9 ? '≈ Ngang ngửa random (như kỳ vọng — lottery is random)'
+                : '⚠️ Kém hơn random (variance không may, sẽ trung bình về 1.0x với n lớn)';
+
+  $('#bsContent').innerHTML = `
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div class="bg-white/[0.02] rounded-lg p-3 text-center">
+        <div class="text-[10px] text-gray-500 uppercase">Avg hits</div>
+        <div class="text-2xl font-black ${ratioColor}">${mean.toFixed(2)}</div>
+        <div class="text-[10px] text-gray-500">σ = ${std.toFixed(2)}</div>
+      </div>
+      <div class="bg-white/[0.02] rounded-lg p-3 text-center">
+        <div class="text-[10px] text-gray-500 uppercase">Random baseline</div>
+        <div class="text-2xl font-black text-gray-400">${expected.toFixed(2)}</div>
+        <div class="text-[10px] text-gray-500">K²/N expected</div>
+      </div>
+      <div class="bg-white/[0.02] rounded-lg p-3 text-center">
+        <div class="text-[10px] text-gray-500 uppercase">AI / Random</div>
+        <div class="text-2xl font-black ${ratioColor}">${ratio.toFixed(2)}x</div>
+      </div>
+      <div class="bg-white/[0.02] rounded-lg p-3 text-center">
+        <div class="text-[10px] text-gray-500 uppercase">Best / Worst</div>
+        <div class="text-lg font-bold text-gray-200">${max} / ${min}</div>
+        <div class="text-[10px] text-gray-500">trên ${cfg.pick} số</div>
+      </div>
+    </div>
+    <div class="text-[11px] ${ratioColor} text-center mb-3 font-medium">${verdict}</div>
+    <div class="space-y-1">
+      <div class="text-[10px] text-gray-500 uppercase mb-1">Phân phối số trúng</div>
+      ${distBars}
+    </div>
+    ${bonusInfo}
+    <div class="text-[10px] text-gray-600 italic mt-3 leading-relaxed">
+      Mỗi kỳ test: dùng data TRƯỚC kỳ đó để dự đoán, so với kết quả thực. Theo LLN, ratio sẽ hội tụ ~1.0x với n → ∞ (vì xổ số là random thuần).
+    </div>
+  `;
+}
+
 function renderAll(){
   const cfg = GAMES[currentGame];
   const stats = computeStats(dataset[currentGame], cfg);
   renderPremium();
   renderRecent(stats, cfg);
+  // Backtest stats có thể chậm → defer để không block initial render
+  setTimeout(() => renderBacktestStats(cfg), 100);
 }
 
 function updateDataInfo(){
@@ -1076,6 +1227,7 @@ $$('.game-tab').forEach(b => b.addEventListener('click', () => {
   renderAll();
 }));
 $('#reloadBtn').addEventListener('click', loadAll);
+$('#bsRun').addEventListener('click', () => renderBacktestStats(GAMES[currentGame]));
 
 loadAll();
 </script>
