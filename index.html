@@ -164,10 +164,11 @@
 const GAMES = {
   // bonusFromMain=true: bonus là quả thứ 7 cùng máy → khác main (verified 6/55, 0% overlap n=1347)
   // bonusFromMain=false: bonus quay từ pool riêng (verified 5/35, ~11% overlap matches independent)
-  // xsktSlug: URL slug trên xskt.com.vn để anchor regex (xskt liệt kê nhiều game trên 1 page)
+  // xsktSlug: URL slug trên xskt.com.vn để anchor regex
+  // timeSlots: nếu game có nhiều kỳ/ngày, list time labels theo thứ tự id ascending
   '6/55': { name:'Power 6/55', max:55, pick:6, source:'power655', xskt:'power-655', xsktSlug:'power',            bonus:true,  bonusMax:55, bonusFromMain:true,  bonusLabel:'JP2' },
   '6/45': { name:'Mega 6/45',  max:45, pick:6, source:'power645', xskt:'mega-645',  xsktSlug:'mega645',          bonus:false },
-  '5/35': { name:'Max 5/35',   max:35, pick:5, source:'power535', xskt:'power-535', xsktSlug:'lotto-(?:13|21)h', bonus:true,  bonusMax:12, bonusFromMain:false, bonusLabel:'ĐB'  },
+  '5/35': { name:'Max 5/35',   max:35, pick:5, source:'power535', xskt:'power-535', xsktSlug:'lotto-(?:13|21)h', bonus:true,  bonusMax:12, bonusFromMain:false, bonusLabel:'ĐB', timeSlots:['13h','21h'] },
 };
 let currentGame = '6/55';
 let dataset = {};
@@ -181,7 +182,7 @@ async function fetchHistorical(game){
   const res = await fetch(url, { cache:'no-cache' });
   if(!res.ok) throw new Error('HTTP '+res.status);
   const txt = await res.text();
-  return txt.trim().split('\n').map(l => { try { return JSON.parse(l) } catch(e){ return null } })
+  let draws = txt.trim().split('\n').map(l => { try { return JSON.parse(l) } catch(e){ return null } })
     .filter(Boolean)
     .map((r,i) => {
       const main = r.result.slice(0, cfg.pick).map(Number).sort((a,b)=>a-b);
@@ -190,10 +191,20 @@ async function fetchHistorical(game){
         const b = Number(r.result[cfg.pick]);
         if(b >= 1 && b <= cfg.bonusMax) bonus = b;
       }
-      return { id:r.id||String(i+1), date:r.date, numbers:main, bonus };
+      return { id:r.id||String(i+1), date:r.date, numbers:main, bonus, time:null };
     })
-    .filter(d => d.numbers.length===cfg.pick && d.numbers.every(n => n>=1 && n<=cfg.max))
-    .reverse();
+    .filter(d => d.numbers.length===cfg.pick && d.numbers.every(n => n>=1 && n<=cfg.max));
+  // Multi-draw-per-day: gán time slot theo thứ tự id ascending trong cùng date
+  if(cfg.timeSlots){
+    const byDate = {};
+    draws.forEach(d => { (byDate[d.date] = byDate[d.date] || []).push(d) });
+    Object.values(byDate).forEach(arr => {
+      arr.sort((a,b) => a.id.localeCompare(b.id));
+      arr.forEach((d, i) => { d.time = cfg.timeSlots[i] || null });
+    });
+  }
+  draws.forEach(d => { d.uniqueKey = d.time ? d.date + '_' + d.time : d.date });
+  return draws.reverse(); // newest first
 }
 
 // Game draw schedule (used by fetchFresh + Premium next-draw logic)
@@ -238,17 +249,23 @@ async function fetchFresh(game){
   const md = await res.text();
   const draws = [];
   const seen = new Set();
-  // Anchor on game-specific URL slug để tránh match navigation date generic ở đầu page.
-  // Capture: main numbers line + optional bonus line (Số JP2 NN cho 6/55)
+  // Anchor on game-specific URL slug + capture slug để biết time slot (5/35: lotto-13h vs lotto-21h)
   const re = new RegExp(
-    `xs(?:${cfg.xsktSlug})/ngay-(\\d{1,2})-(\\d{1,2})-(\\d{4})` +
+    `xs(${cfg.xsktSlug})/ngay-(\\d{1,2})-(\\d{1,2})-(\\d{4})` +
     `[\\s\\S]{0,400}?(?:K[êế]t qu[ảa])[^\\d]{0,40}([\\d\\s|]{11,80})` +
     `(?:[\\s\\S]{0,80}?S[ốo]\\s*JP2\\s*(\\d{1,2}))?`, 'g');
   let m;
   while((m = re.exec(md)) !== null){
-    const [_, d, mo, y, nums, jp2] = m;
+    const [_, matchedSlug, d, mo, y, nums, jp2] = m;
     const date = `${y}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
-    if(seen.has(date)) continue;
+    // Time slot từ slug (5/35: lotto-13h → 13h, lotto-21h → 21h)
+    let time = null;
+    if(cfg.timeSlots){
+      const tm = matchedSlug.match(/(\d{2})h/);
+      time = tm ? tm[1] + 'h' : null;
+    }
+    const key = time ? date + '_' + time : date;
+    if(seen.has(key)) continue;
     if(!isValidFreshDraw(date, game)) continue;
     const parts = nums.split('|').map(p => p.trim().split(/\s+/).map(Number).filter(n => !isNaN(n)));
     const mainPart = (parts[0] || []).filter(n => n>=1 && n<=cfg.max);
@@ -276,25 +293,27 @@ async function fetchFresh(game){
       console.warn('Skipped suspicious result (likely cross-promo):', game, date, arr);
       continue;
     }
-    seen.add(date);
-    draws.push({ id:'fresh-'+date, date, numbers:arr, bonus });
+    seen.add(key);
+    draws.push({ id:'fresh-'+key, date, time, numbers:arr, bonus, uniqueKey:key });
   }
   return draws;
 }
 
 function mergeDraws(hist, fresh){
   const map = new Map();
-  hist.forEach(d => map.set(d.date, d));
-  // Fresh wins on conflict (xskt là nguồn live, có bonus đầy đủ hơn historical lúc mới ra)
-  // Nhưng nếu fresh thiếu bonus mà historical có, giữ historical
+  hist.forEach(d => map.set(d.uniqueKey || d.date, d));
   fresh.forEach(d => {
-    const existing = map.get(d.date);
-    if(!existing) { map.set(d.date, d); return }
-    // Prefer entry với bonus nếu cfg expects bonus
-    if(existing.bonus && !d.bonus) return; // historical có bonus, fresh không → giữ historical
-    map.set(d.date, d);
+    const k = d.uniqueKey || d.date;
+    const existing = map.get(k);
+    if(!existing) { map.set(k, d); return }
+    if(existing.bonus && !d.bonus) return;
+    map.set(k, d);
   });
-  return [...map.values()].sort((a,b) => b.date.localeCompare(a.date));
+  // Sort: newer date first, then later time slot first (21h trước 13h cùng ngày)
+  return [...map.values()].sort((a,b) => {
+    if(a.date !== b.date) return b.date.localeCompare(a.date);
+    return (b.time || '').localeCompare(a.time || '');
+  });
 }
 
 // Fallback simulator
@@ -319,7 +338,8 @@ function simulate(game){
         tries++;
       }
     }
-    out.push({id:i+1,date:d.toISOString().slice(0,10),numbers:[...p].sort((a,b)=>a-b),bonus});
+    const date = d.toISOString().slice(0,10);
+    out.push({id:String(i+1),date,numbers:[...p].sort((a,b)=>a-b),bonus,time:null,uniqueKey:date});
   }
   return out.reverse();
 }
@@ -597,7 +617,7 @@ function ball(n, cls=''){
 
 
 // Prediction cache — Supabase (L2 persistent) + localStorage (L1 fast)
-const PRED_CACHE_VERSION = 'v7'; // v7: fix wrong-date parsing in fetchFresh (cross-game contamination)
+const PRED_CACHE_VERSION = 'v8'; // v8: 5/35 multi-draw/day (13h+21h) — uniqueKey = date_time
 const SUPABASE_URL = 'https://bfstkfcuhomtetedexmq.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_C7422FmsYC23Bwh5ti_5xg_5LuV8GF7';
 const SB_HEADERS = { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY };
@@ -607,17 +627,24 @@ function getCachedPred(game, date){
   try { const s = localStorage.getItem(predCacheKey(game, date)); return s ? JSON.parse(s) : null }
   catch(e){ return null }
 }
+// Parse cache key → {drawDate, time, kind}
+// Backtest: '2026-05-22' | '2026-05-22_13h'
+// Premium:  'premium_2026-05-23' | 'premium_2026-05-23_13h'
+function parseCacheKey(key){
+  const isPremium = key.startsWith('premium_');
+  const rest = isPremium ? key.slice(8) : key;
+  const [drawDate, time = null] = rest.split('_');
+  return { drawDate, time, kind: isPremium ? 'premium' : 'backtest' };
+}
+
 function setCachedPred(game, date, pred){
   try { localStorage.setItem(predCacheKey(game, date), JSON.stringify(pred)) } catch(e){}
-  // Fire-and-forget save to Supabase
-  const isPremium = date.startsWith('premium_');
-  const drawDate = isPremium ? date.slice(8) : date;
-  const kind = isPremium ? 'premium' : 'backtest';
+  const { drawDate, time, kind } = parseCacheKey(date);
   fetch(`${SUPABASE_URL}/rest/v1/predictions`, {
     method: 'POST',
     headers: { ...SB_HEADERS, 'Content-Type':'application/json', 'Prefer':'resolution=ignore-duplicates' },
     body: JSON.stringify({
-      game, draw_date: drawDate, kind,
+      game, draw_date: drawDate, time, kind,
       numbers: pred.numbers,
       bonus: pred.bonus || null,
       confidence: pred.confidence,
@@ -638,7 +665,8 @@ async function syncFromSupabase(){
       if(!res.ok) continue;
       const rows = await res.json();
       rows.forEach(r => {
-        const key = r.kind === 'premium' ? 'premium_' + r.draw_date : r.draw_date;
+        const baseKey = r.draw_date + (r.time ? '_' + r.time : '');
+        const key = r.kind === 'premium' ? 'premium_' + baseKey : baseKey;
         const pred = {
           numbers: r.numbers,
           bonus: r.bonus,
@@ -658,24 +686,26 @@ async function syncFromSupabase(){
 // Cache theo (game, drawDate) → không thay đổi giữa các ngày.
 function backtestPredict(drawIdx, cfg, game){
   const all = dataset[game];
-  const drawDateStr = all[drawIdx].date;
+  const draw = all[drawIdx];
+  const cacheKey = draw.uniqueKey || draw.date;
 
-  // 1. Check cache trước — nếu đã có thì trả về luôn (đảm bảo stability)
-  const cached = getCachedPred(game, drawDateStr);
+  const cached = getCachedPred(game, cacheKey);
   if(cached) return cached;
 
-  // 2. Tính fresh, dùng chỉ data OLDER than drawDate (date-based, không dùng index để tránh shift)
-  const past = all.filter(d => d.date < drawDateStr);
+  // "Past" = mọi kỳ trước drawIdx (cũ hơn về mặt thời gian — newest-first sorted)
+  // Dùng uniqueKey để so sánh, không chỉ date (5/35 có 2 kỳ/ngày: 13h trước 21h cùng ngày)
+  const past = all.slice(drawIdx + 1);
   if(past.length < 30) return null;
 
   const pastStats = computeStats(past, cfg);
   const scores = scoreNumbers(pastStats, cfg, past);
-  const seed = dateSeed(new Date(drawDateStr), game);
+  // Seed bao gồm time slot để 13h và 21h cùng ngày có prediction khác nhau
+  const seed = dateSeed(new Date(draw.date), game, draw.time);
 
   const result = withSeed(seed, () => generateBestSet(scores, pastStats, cfg));
   if(result && cfg.bonus) result.bonus = withSeed(seed+1, () => predictBonus(pastStats, cfg, result.numbers));
 
-  if(result) setCachedPred(game, drawDateStr, result);
+  if(result) setCachedPred(game, cacheKey, result);
   return result;
 }
 
@@ -759,7 +789,7 @@ function renderRecent(stats, cfg){
       <div class="flex items-center justify-between gap-2 mb-2.5 flex-wrap">
         <div class="flex items-center gap-2">
           <span class="pill bg-white/5 text-gray-400">${idx===0?'Mới nhất':'Kỳ '+(idx+1)}</span>
-          <span class="text-xs font-mono text-gray-300">${d.date}</span>
+          <span class="text-xs font-mono text-gray-300">${d.date}${d.time?' '+d.time:''}</span>
           <span class="text-[10px] text-gray-500">#${d.id.toString().slice(-5)}</span>
         </div>
         ${matchBadge}
@@ -802,28 +832,43 @@ function renderRecent(stats, cfg){
 // ============================================================
 const DRAW_NAME_VI = ['CN','T2','T3','T4','T5','T6','T7'];
 
+// Trả về {date, time} của kỳ quay tiếp theo
 function nextDrawDate(game){
+  const cfg = GAMES[game];
   const sched = GAME_SCHEDULE[game];
   const now = new Date();
+  const hh = now.getHours();
+  const mm = now.getMinutes();
+  // Game có 2 kỳ/ngày (5/35): xác định kỳ tiếp theo dựa trên giờ
+  if(cfg.timeSlots){
+    // 13h quay ~13:00 công bố ~13:30 · 21h quay ~21:00 công bố ~21:30
+    if(hh < 13 || (hh===13 && mm < 30)) return { date: now, time: '13h' };
+    if(hh < 21 || (hh===21 && mm < 30)) return { date: now, time: '21h' };
+    // Sau 21:30 → ngày mai 13h
+    const tmr = new Date(now); tmr.setDate(now.getDate()+1);
+    return { date: tmr, time: '13h' };
+  }
+  // Game 1 kỳ/ngày (6/55, 6/45)
   for(let i=0;i<8;i++){
     const d = new Date(now); d.setDate(now.getDate()+i);
     if(sched.includes(d.getDay())){
-      // Vietlott quay ~18:00, kết quả công bố ~19:30 → after that, skip to next draw
-      if(i===0 && (now.getHours() > 19 || (now.getHours()===19 && now.getMinutes()>=30))) continue;
-      return d;
+      if(i===0 && (hh > 19 || (hh===19 && mm>=30))) continue;
+      return { date: d, time: null };
     }
   }
-  return now;
+  return { date: now, time: null };
 }
 
-function formatNextDraw(d){
+function formatNextDraw(nd){
+  const d = nd.date || nd;
   const dd = String(d.getDate()).padStart(2,'0');
   const mm = String(d.getMonth()+1).padStart(2,'0');
-  return `${DRAW_NAME_VI[d.getDay()]} · ${dd}/${mm}`;
+  const t = nd.time ? ' ' + nd.time : '';
+  return `${DRAW_NAME_VI[d.getDay()]} · ${dd}/${mm}${t}`;
 }
 
-function dateSeed(d, game){
-  const s = `${d.getFullYear()}${d.getMonth()}${d.getDate()}-${game}`;
+function dateSeed(d, game, time){
+  const s = `${d.getFullYear()}${d.getMonth()}${d.getDate()}-${game}-${time||''}`;
   let h = 0;
   for(let i=0;i<s.length;i++){ h = (h*31 + s.charCodeAt(i))|0 }
   return Math.abs(h);
@@ -840,14 +885,14 @@ function withSeed(seed, fn){
 function generatePremium(draws, cfg, game){
   const stats = computeStats(draws, cfg);
   const scores = scoreNumbers(stats, cfg, draws);
-  const today = new Date();
-  const todayStr = today.toISOString().slice(0,10);
-
-  const cacheKey = 'premium_' + todayStr;
+  const nd = nextDrawDate(game);
+  const ndDateStr = nd.date.toISOString().slice(0,10);
+  // Cache key bao gồm next-draw date + time slot → 13h và 21h cùng ngày khác cache
+  const cacheKey = 'premium_' + ndDateStr + (nd.time ? '_' + nd.time : '');
   const cached = getCachedPred(game, cacheKey);
   if(cached) return { ...cached, scores, stats };
 
-  const seed = dateSeed(today, game);
+  const seed = dateSeed(nd.date, game, nd.time);
   const result = withSeed(seed, () => generateBestSet(scores, stats, cfg));
   if(result && cfg.bonus) result.bonus = withSeed(seed+1, () => predictBonus(stats, cfg, result.numbers));
 
@@ -865,7 +910,9 @@ function renderPremium(){
 
   // countdown
   const cd = () => {
-    const drawTime = new Date(nd); drawTime.setHours(18,0,0,0);
+    const drawTime = new Date(nd.date);
+    const drawHour = nd.time === '13h' ? 13 : (nd.time === '21h' ? 21 : 18);
+    drawTime.setHours(drawHour, 0, 0, 0);
     const diff = drawTime - new Date();
     if(diff <= 0){ $('#countdown').textContent = 'đang quay'; return }
     const h = Math.floor(diff/3600000);
@@ -879,9 +926,10 @@ function renderPremium(){
 
   const pick = generatePremium(draws, cfg, currentGame);
 
-  // Check nếu hôm nay đã có kết quả thực → so sánh
-  const todayISO = new Date().toISOString().slice(0,10);
-  const actualToday = draws.find(d => d.date === todayISO);
+  // Tìm kết quả thực của kỳ premium được dự đoán (match date + time)
+  const ndDateStr = nd.date.toISOString().slice(0,10);
+  const actualToday = draws.find(d => d.date === ndDateStr && (d.time || null) === (nd.time || null));
+  const todayISO = ndDateStr;
   const actualSet = actualToday ? new Set(actualToday.numbers) : new Set();
   const matchCount = actualToday ? pick.numbers.filter(n => actualSet.has(n)).length : 0;
 
