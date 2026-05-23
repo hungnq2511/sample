@@ -845,8 +845,12 @@ function evaluateDraw(d, stats, cfg, allDraws, drawIndex){
     sumScore, oeScore, spreadScore, balanceScore, pairScore, overall };
 }
 
-// Prediction cache — đảm bảo prediction cho mỗi (game, drawDate) STABLE vĩnh viễn
-const PRED_CACHE_VERSION = 'v3'; // bump nếu đổi thuật toán (v3: thêm predicted bonus)
+// Prediction cache — Supabase (L2 persistent) + localStorage (L1 fast)
+const PRED_CACHE_VERSION = 'v3';
+const SUPABASE_URL = 'https://bfstkfcuhomtetedexmq.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_C7422FmsYC23Bwh5ti_5xg_5LuV8GF7';
+const SB_HEADERS = { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY };
+
 function predCacheKey(game, date){ return `vl_pred_${PRED_CACHE_VERSION}_${game}_${date}` }
 function getCachedPred(game, date){
   try { const s = localStorage.getItem(predCacheKey(game, date)); return s ? JSON.parse(s) : null }
@@ -854,6 +858,49 @@ function getCachedPred(game, date){
 }
 function setCachedPred(game, date, pred){
   try { localStorage.setItem(predCacheKey(game, date), JSON.stringify(pred)) } catch(e){}
+  // Fire-and-forget save to Supabase
+  const isPremium = date.startsWith('premium_');
+  const drawDate = isPremium ? date.slice(8) : date;
+  const kind = isPremium ? 'premium' : 'backtest';
+  fetch(`${SUPABASE_URL}/rest/v1/predictions`, {
+    method: 'POST',
+    headers: { ...SB_HEADERS, 'Content-Type':'application/json', 'Prefer':'resolution=ignore-duplicates' },
+    body: JSON.stringify({
+      game, draw_date: drawDate, kind,
+      numbers: pred.numbers,
+      bonus: pred.bonus || null,
+      confidence: pred.confidence,
+      sum_value: pred.sum,
+      odd_count: pred.odd,
+      spread: pred.spread,
+      algo_version: PRED_CACHE_VERSION,
+    }),
+  }).catch(e => console.warn('Supabase save fail', e));
+}
+
+// Pre-load all saved predictions từ Supabase vào localStorage → predictions persist across devices
+async function syncFromSupabase(){
+  for(const game of Object.keys(GAMES)){
+    try {
+      const url = `${SUPABASE_URL}/rest/v1/predictions?game=eq.${encodeURIComponent(game)}&algo_version=eq.${PRED_CACHE_VERSION}&order=draw_date.desc&limit=200`;
+      const res = await fetch(url, { headers: SB_HEADERS });
+      if(!res.ok) continue;
+      const rows = await res.json();
+      rows.forEach(r => {
+        const key = r.kind === 'premium' ? 'premium_' + r.draw_date : r.draw_date;
+        const pred = {
+          numbers: r.numbers,
+          bonus: r.bonus,
+          confidence: r.confidence,
+          sum: r.sum_value,
+          odd: r.odd_count,
+          spread: r.spread,
+        };
+        try { localStorage.setItem(predCacheKey(game, key), JSON.stringify(pred)) } catch(e){}
+      });
+      console.log(`Supabase sync ${game}: ${rows.length} predictions`);
+    } catch(e){ console.warn('Supabase sync fail', game, e) }
+  }
 }
 
 // Backtest: sinh prediction cho kỳ tại drawIdx CHỈ dùng data cũ hơn (vì dataset newest-first).
@@ -1200,6 +1247,8 @@ async function loadAll(){
     dataset[g] = fresh.length ? mergeDraws(hist, fresh) : hist;
     dataset[g]._meta = { historical: hist.length, fresh: fresh.length };
   }));
+  // Sync predictions từ Supabase (cross-device persistence)
+  await syncFromSupabase();
   updateDataInfo();
   renderAll();
 }
