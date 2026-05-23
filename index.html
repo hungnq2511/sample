@@ -456,48 +456,113 @@ function predictBonus(stats, cfg, mainNumbers){
   return best || null;
 }
 
-function generateSet(scores, stats, cfg, useConstraints=true){
+// Quality function: multi-criterion soft scoring (không hard-flag)
+// Mỗi tiêu chí trả về điểm cộng/trừ, tổng hợp thành Quality score
+function computeQuality(picked, scores, stats, cfg){
   const N = cfg.max, K = cfg.pick;
-  const targetSum = stats.avgSum;
-  const sumTolerance = stats.stdSum * 1.0;
+  picked = [...picked].sort((a,b)=>a-b);
+  const sum = picked.reduce((a,b)=>a+b, 0);
+  const odd = picked.filter(n => n%2===1).length;
+  const spread = picked[K-1] - picked[0];
 
-  // Try up to 50 candidates, pick best by composite quality
-  let best = null;
-  for(let attempt=0; attempt<50; attempt++){
+  // 1. Base: tổng score AI ensemble của các số
+  let q = picked.reduce((s,n) => s + scores[n], 0);
+
+  // 2. Sum-target: Gaussian attractor quanh μ với σ
+  const sumZ = (sum - stats.avgSum) / Math.max(stats.stdSum, 1);
+  q += 2.5 * Math.exp(-sumZ*sumZ / 2);
+
+  // 3. Odd/even balance: peak tại K/2
+  const oeDiff = Math.abs(odd - K/2);
+  q += 1.5 * Math.max(0, 1 - oeDiff / (K/2 + 0.5));
+
+  // 4. Spread: nên ≥ 0.6×max range để tránh dồn cụm
+  const spreadRatio = spread / N;
+  if(spreadRatio >= 0.6) q += 1.0;
+  else q -= (0.6 - spreadRatio) * 2.5;
+
+  // 5. Anti-clustering: penalty nếu 3+ số cùng decade (1-10, 11-20, ...)
+  const decades = {};
+  picked.forEach(n => { const d = Math.floor((n-1)/10); decades[d] = (decades[d]||0) + 1 });
+  const maxCluster = Math.max(...Object.values(decades));
+  if(maxCluster >= 3) q -= 1.5 * (maxCluster - 2);
+
+  // 6. Anti-consecutive: penalty cho số liên tiếp (≥2 cặp adjacent là không tự nhiên)
+  let consec = 0;
+  for(let i=1; i<picked.length; i++) if(picked[i] - picked[i-1] === 1) consec++;
+  q -= consec * 0.4;
+
+  // 7. Pair affinity: log-scaled bonus cho các cặp xuất hiện cùng nhau nhiều trong lịch sử
+  let pairScore = 0;
+  for(let i=0; i<K; i++) for(let j=i+1; j<K; j++){
+    const k = picked[i] + '-' + picked[j];
+    pairScore += (stats.pairs[k] || 0);
+  }
+  const expectedPairTotal = stats.sums.length * (K*(K-1)/2) * (K*(K-1)) / (N*(N-1));
+  q += 0.6 * Math.log(1 + pairScore / Math.max(1, expectedPairTotal));
+
+  return { quality:q, sum, odd, spread };
+}
+
+// Simulated Annealing: bắt đầu từ weighted sample → swap để local-optimize
+function generateSet(scores, stats, cfg){
+  const N = cfg.max, K = cfg.pick;
+
+  // Phase 1: Khởi tạo bằng weighted sampling
+  function weightedSample(){
     const w = scores.slice();
     const picked = [];
     while(picked.length < K){
-      // apply pair boost for AI mode
       const adjusted = w.map((s,i) => i===0 ? 0 : s * pairBoost(stats, picked, i));
       const total = adjusted.reduce((a,b)=>a+b, 0);
+      if(total <= 0){
+        for(let n=1; n<=N; n++) if(!picked.includes(n)){ picked.push(n); w[n]=0; break }
+        continue;
+      }
       let r = Math.random() * total;
       for(let n=1; n<=N; n++){
         r -= adjusted[n];
-        if(r <= 0){
-          if(!picked.includes(n)){ picked.push(n); w[n] = 0 }
-          break;
-        }
+        if(r <= 0){ if(!picked.includes(n)){ picked.push(n); w[n]=0 } break }
       }
     }
-    picked.sort((a,b)=>a-b);
-
-    // Quality check
-    const sum = picked.reduce((a,b)=>a+b,0);
-    const odd = picked.filter(n=>n%2===1).length;
-    const spread = picked[K-1] - picked[0];
-    const sumOk = Math.abs(sum - targetSum) <= sumTolerance;
-    const oeOk = odd >= Math.floor(K/2)-1 && odd <= Math.ceil(K/2)+1;
-    const spreadOk = spread >= N * 0.5;
-
-    const quality = picked.reduce((s,n)=>s+scores[n],0)
-      + (sumOk ? 2 : 0) + (oeOk ? 1.5 : 0) + (spreadOk ? 1 : 0);
-
-    if(!best || quality > best.quality){
-      best = { numbers: picked, sum, odd, spread, quality };
-    }
-    if(useConstraints && sumOk && oeOk && spreadOk) break;
+    return picked;
   }
-  return best;
+
+  let current = weightedSample();
+  let curEval = computeQuality(current, scores, stats, cfg);
+  let best = [...current], bestEval = curEval;
+
+  // Phase 2: Simulated annealing — swap 1 số ngẫu nhiên với số ngoài set
+  const ITERS = 60;
+  const T0 = 1.5;
+  for(let i=0; i<ITERS; i++){
+    const T = T0 * (1 - i/ITERS) + 0.01; // linear cool, never zero
+    const swapOutIdx = Math.floor(Math.random() * K);
+    const outNum = current[swapOutIdx];
+    // Pick swap-in target weighted by scores, but allow exploration
+    let inNum;
+    if(Math.random() < 0.7){ // 70% scored sampling
+      const candidates = [];
+      let totalW = 0;
+      for(let n=1; n<=N; n++) if(!current.includes(n)){ candidates.push(n); totalW += scores[n] }
+      if(!candidates.length) continue;
+      let r = Math.random() * totalW;
+      for(const c of candidates){ r -= scores[c]; if(r <= 0){ inNum = c; break } }
+      if(!inNum) inNum = candidates[candidates.length-1];
+    } else { // 30% pure random (exploration)
+      do { inNum = 1 + Math.floor(Math.random() * N) } while(current.includes(inNum));
+    }
+    const candidate = current.map((n, idx) => idx === swapOutIdx ? inNum : n);
+    const candEval = computeQuality(candidate, scores, stats, cfg);
+    const dQ = candEval.quality - curEval.quality;
+    if(dQ > 0 || Math.random() < Math.exp(dQ / T)){
+      current = candidate;
+      curEval = candEval;
+      if(curEval.quality > bestEval.quality){ best = [...current]; bestEval = curEval }
+    }
+  }
+
+  return { numbers:[...best].sort((a,b)=>a-b), ...bestEval };
 }
 
 // ============================================================
@@ -515,7 +580,7 @@ function ball(n, cls=''){
 
 
 // Prediction cache — Supabase (L2 persistent) + localStorage (L1 fast)
-const PRED_CACHE_VERSION = 'v5'; // v5: 6/55 bonus excludes main (verified independent for 5/35)
+const PRED_CACHE_VERSION = 'v6'; // v6: Simulated annealing + multi-criterion quality + percentile confidence
 const SUPABASE_URL = 'https://bfstkfcuhomtetedexmq.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_C7422FmsYC23Bwh5ti_5xg_5LuV8GF7';
 const SB_HEADERS = { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY };
@@ -588,28 +653,42 @@ function backtestPredict(drawIdx, cfg, game){
 
   const pastStats = computeStats(past, cfg);
   const scores = scoreNumbers(pastStats, cfg, past);
-  const maxScore = Math.max(...scores.slice(1));
   const seed = dateSeed(new Date(drawDateStr), game);
 
-  const result = withSeed(seed, () => {
-    let best = null;
-    for(let i=0;i<200;i++){
-      const s = generateSet(scores, pastStats, cfg, true);
-      const conf = s.numbers.reduce((sum,n)=>sum+scores[n],0) / (cfg.pick * maxScore);
-      let consec = 0;
-      for(let j=1;j<s.numbers.length;j++) if(s.numbers[j]-s.numbers[j-1]===1) consec++;
-      const finalQ = s.quality + conf*5 - consec*0.5;
-      if(!best || finalQ > best.finalQ) best = { numbers:s.numbers, confidence: Math.min(0.99, conf), sum:s.sum, odd:s.odd, spread:s.spread, finalQ };
-    }
-    if(best && cfg.bonus){
-      best.bonus = predictBonus(pastStats, cfg, best.numbers);
-    }
-    return best;
-  });
+  const result = withSeed(seed, () => generateBestSet(scores, pastStats, cfg));
+  if(result && cfg.bonus) result.bonus = withSeed(seed+1, () => predictBonus(pastStats, cfg, result.numbers));
 
-  // 3. Cache lại
   if(result) setCachedPred(game, drawDateStr, result);
   return result;
+}
+
+// Tạo bộ số tốt nhất: 80 SA candidates, calibrate confidence theo percentile
+function generateBestSet(scores, stats, cfg){
+  const ITERS = 80;
+  const qualities = [];
+  let best = null;
+  for(let i=0; i<ITERS; i++){
+    const s = generateSet(scores, stats, cfg);
+    qualities.push(s.quality);
+    if(!best || s.quality > best.quality) best = s;
+  }
+  // Confidence = percentile của quality so với baseline (random sampling)
+  // Tính baseline: 20 bộ random uniform
+  const baseline = [];
+  for(let i=0; i<20; i++){
+    const r = [];
+    while(r.length < cfg.pick){
+      const n = 1 + Math.floor(Math.random() * cfg.max);
+      if(!r.includes(n)) r.push(n);
+    }
+    baseline.push(computeQuality(r, scores, stats, cfg).quality);
+  }
+  const baselineMean = baseline.reduce((a,b)=>a+b,0) / baseline.length;
+  const baselineStd = Math.sqrt(baseline.reduce((a,b)=>a+(b-baselineMean)**2,0) / baseline.length);
+  // Z-score of best quality vs baseline → sigmoid → 0.50..0.99
+  const z = (best.quality - baselineMean) / Math.max(baselineStd, 0.1);
+  const confidence = Math.min(0.99, 0.5 + 0.49 * Math.tanh(z / 3));
+  return { numbers: best.numbers, sum: best.sum, odd: best.odd, spread: best.spread, quality: best.quality, confidence };
 }
 
 function renderRecent(stats, cfg){
@@ -744,33 +823,17 @@ function withSeed(seed, fn){
 function generatePremium(draws, cfg, game){
   const stats = computeStats(draws, cfg);
   const scores = scoreNumbers(stats, cfg, draws);
-  const maxScore = Math.max(...scores.slice(1));
   const today = new Date();
   const todayStr = today.toISOString().slice(0,10);
 
-  // Cache by today + game → stable within the day
   const cacheKey = 'premium_' + todayStr;
   const cached = getCachedPred(game, cacheKey);
   if(cached) return { ...cached, scores, stats };
 
   const seed = dateSeed(today, game);
-  const result = withSeed(seed, () => {
-    let best = null;
-    for(let i=0;i<200;i++){
-      const s = generateSet(scores, stats, cfg, true);
-      const conf = s.numbers.reduce((sum,n)=>sum+scores[n],0) / (cfg.pick * maxScore);
-      let consec = 0;
-      for(let j=1;j<s.numbers.length;j++) if(s.numbers[j]-s.numbers[j-1]===1) consec++;
-      const finalQ = s.quality + conf*5 - consec*0.5;
-      if(!best || finalQ > best.finalQ){
-        best = { numbers:s.numbers, confidence: Math.min(0.99, conf), sum:s.sum, odd:s.odd, spread:s.spread, quality:s.quality };
-      }
-    }
-    if(best && cfg.bonus){
-      best.bonus = predictBonus(stats, cfg, best.numbers);
-    }
-    return best;
-  });
+  const result = withSeed(seed, () => generateBestSet(scores, stats, cfg));
+  if(result && cfg.bonus) result.bonus = withSeed(seed+1, () => predictBonus(stats, cfg, result.numbers));
+
   if(result) setCachedPred(game, cacheKey, result);
   return { ...result, scores, stats };
 }
