@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Vietlott AI — Dự đoán & Thống kê</title>
 <script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
   *{font-family:'Inter',system-ui,sans-serif}
@@ -67,26 +66,7 @@
     color:white; background:rgba(124,58,237,0.15);
     border-color:rgba(124,58,237,0.4);
   }
-  .section-tab{
-    padding:8px 14px;border-radius:8px;font-size:13px;font-weight:500;
-    color:#9ca3af;background:transparent;transition:all .2s;
-  }
-  .section-tab:hover{ color:white }
-  .section-tab.active{ color:white;background:rgba(255,255,255,0.06) }
   .grad{ background:linear-gradient(135deg,#a78bfa,#ec4899,#f59e0b); -webkit-background-clip:text;background-clip:text;color:transparent }
-  .heat-cell{
-    aspect-ratio:1;border-radius:6px;display:flex;align-items:center;justify-content:center;
-    font-weight:600;font-size:11px;cursor:default;transition:transform .1s;position:relative;
-  }
-  .heat-cell:hover{ transform:scale(1.15);z-index:5;outline:2px solid white }
-  .heat-cell .cnt{ position:absolute;bottom:1px;right:3px;font-size:8px;opacity:0.7 }
-  table.draws{ width:100%;border-collapse:collapse;font-size:13px }
-  table.draws th{ text-align:left;padding:10px;color:#9ca3af;font-weight:500;border-bottom:1px solid rgba(255,255,255,0.06);position:sticky;top:0;background:#0f0f1a;font-size:11px;letter-spacing:0.5px;text-transform:uppercase }
-  table.draws td{ padding:10px;border-bottom:1px solid rgba(255,255,255,0.03) }
-  table.draws tr:hover td{ background:rgba(124,58,237,0.04) }
-  .scroll-y{ max-height:380px;overflow-y:auto }
-  .scroll-y::-webkit-scrollbar{ width:6px }
-  .scroll-y::-webkit-scrollbar-thumb{ background:#374151;border-radius:3px }
   .pill{ display:inline-block;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:600;letter-spacing:0.3px }
   .ai-pulse{ animation:pulse 2s infinite }
   @keyframes pulse{ 0%,100%{box-shadow:0 0 0 0 rgba(167,139,250,0.5)} 50%{box-shadow:0 0 0 8px rgba(167,139,250,0)} }
@@ -94,8 +74,6 @@
   details>summary::-webkit-details-marker{ display:none }
   details[open] .chev{ transform:rotate(180deg) }
   .chev{ transition:transform .2s }
-  .progress-bar{ height:4px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden }
-  .progress-fill{ height:100%;background:linear-gradient(90deg,#a78bfa,#ec4899);transition:width .4s }
 </style>
 </head>
 <body>
@@ -184,23 +162,14 @@
 // CONFIG
 // ============================================================
 const GAMES = {
-  '6/55': { name:'Power 6/55', max:55, pick:6, source:'power655', xskt:'power-655', bonus:true,  bonusMax:55, bonusLabel:'JP2' },
+  // bonusFromMain=true: bonus is 7th ball from same machine → MUST differ from 6 main (verified 6/55)
+  // bonusFromMain=false: bonus drawn independently from separate pool (verified 5/35)
+  '6/55': { name:'Power 6/55', max:55, pick:6, source:'power655', xskt:'power-655', bonus:true,  bonusMax:55, bonusFromMain:true,  bonusLabel:'JP2' },
   '6/45': { name:'Mega 6/45',  max:45, pick:6, source:'power645', xskt:'mega-645',  bonus:false },
-  '5/35': { name:'Max 5/35',   max:35, pick:5, source:'power535', xskt:'power-535', bonus:true,  bonusMax:12, bonusLabel:'ĐB'  },
+  '5/35': { name:'Max 5/35',   max:35, pick:5, source:'power535', xskt:'power-535', bonus:true,  bonusMax:12, bonusFromMain:false, bonusLabel:'ĐB'  },
 };
 let currentGame = '6/55';
 let dataset = {};
-let charts = {};
-
-const MODEL_DESC = {
-  ai: `<b class="text-purple-300">AI Ensemble</b> kết hợp 6 mô hình thống kê độc lập (Bayesian frequency, Markov chain transition, Poisson gap recurrence, EMA momentum 30 kỳ, pair-affinity Apriori, chi-square deviation), sau đó vote có trọng số → sampling Monte Carlo có ràng buộc (tổng nằm trong khoảng phổ biến ±15%, chẵn/lẻ balanced, spread ≥ max/pick). <b>Bộ số được tối ưu để cân bằng giữa exploitation (số có tín hiệu mạnh) và exploration (đa dạng hóa rủi ro).</b>`,
-  bayes: `<b>Bayesian Frequency</b>: Posterior probability = (frequency + α) / (total + α·N) với α=1 (Laplace smoothing). Số có tần suất cao trong lịch sử dài hạn được ưu tiên.`,
-  markov: `<b>Markov Chain</b>: Học ma trận chuyển trạng thái P(số n xuất hiện | số m xuất hiện kỳ trước). Dự đoán dựa vào các số trong kỳ gần nhất.`,
-  hot: `<b>Hot Strategy</b>: Ưu tiên các số có tần suất xuất hiện cao nhất + đang trong streak (xuất hiện trong 20 kỳ gần đây).`,
-  cold: `<b>Cold/Due Strategy</b>: Theo lý thuyết Law of Large Numbers, các số vắng lâu có xu hướng "về" để cân bằng phân phối. Ưu tiên số có gap lớn nhất.`,
-  recent: `<b>EMA Recent Trend</b>: Exponentially weighted moving average với α=0.1, trọng số giảm dần theo thời gian. Bắt sóng momentum ngắn hạn.`,
-  balanced: `<b>Balanced</b>: 50% hot + 50% cold để giảm variance.`,
-};
 
 // ============================================================
 // DATA LAYER
@@ -299,7 +268,15 @@ async function fetchFresh(game){
 function mergeDraws(hist, fresh){
   const map = new Map();
   hist.forEach(d => map.set(d.date, d));
-  fresh.forEach(d => { if(!map.has(d.date)) map.set(d.date, d) });
+  // Fresh wins on conflict (xskt là nguồn live, có bonus đầy đủ hơn historical lúc mới ra)
+  // Nhưng nếu fresh thiếu bonus mà historical có, giữ historical
+  fresh.forEach(d => {
+    const existing = map.get(d.date);
+    if(!existing) { map.set(d.date, d); return }
+    // Prefer entry với bonus nếu cfg expects bonus
+    if(existing.bonus && !d.bonus) return; // historical có bonus, fresh không → giữ historical
+    map.set(d.date, d);
+  });
   return [...map.values()].sort((a,b) => b.date.localeCompare(a.date));
 }
 
@@ -317,7 +294,14 @@ function simulate(game){
     }
     const d=new Date(d0); d.setDate(d.getDate()+i*2);
     let bonus=null;
-    if(cfg.bonus){ while(bonus===null){ const b=1+Math.floor(rnd()*cfg.max); if(!p.has(b)) bonus=b } }
+    if(cfg.bonus){
+      let tries=0;
+      while(bonus===null && tries<50){
+        const b=1+Math.floor(rnd()*cfg.bonusMax);
+        if(!cfg.bonusFromMain || !p.has(b)) bonus=b;
+        tries++;
+      }
+    }
     out.push({id:i+1,date:d.toISOString().slice(0,10),numbers:[...p].sort((a,b)=>a-b),bonus});
   }
   return out.reverse();
@@ -326,7 +310,17 @@ function simulate(game){
 // ============================================================
 // STATISTICS ENGINE
 // ============================================================
+// Memoize computeStats — gọi nhiều lần với cùng dataset (renderAll + backtestPredict × 5)
+const _statsCache = new Map();
 function computeStats(draws, cfg){
+  const key = cfg.name + ':' + draws.length + ':' + (draws[0]?.date || '') + ':' + (draws[draws.length-1]?.date || '');
+  if(_statsCache.has(key)) return _statsCache.get(key);
+  if(_statsCache.size > 30) _statsCache.clear(); // prevent memory bloat
+  const result = _computeStatsImpl(draws, cfg);
+  _statsCache.set(key, result);
+  return result;
+}
+function _computeStatsImpl(draws, cfg){
   const N = cfg.max;
   const freq = Array(N+1).fill(0);
   const lastSeen = Array(N+1).fill(draws.length);
@@ -396,55 +390,27 @@ function computeStats(draws, cfg){
 // ============================================================
 // PREDICTION ENGINE — multiple models + AI ensemble
 // ============================================================
-function scoreNumbers(stats, cfg, model, draws){
+// AI Ensemble scoring: weighted vote of 6 statistical signals
+function scoreNumbers(stats, cfg, draws){
   const N = cfg.max;
-  const totalDraws = draws.length;
-  const expected = (totalDraws * cfg.pick) / N; // expected freq per number
+  const expected = (draws.length * cfg.pick) / N;
   const lastDraw = draws[0]?.numbers || [];
-
   const scores = Array(N+1).fill(0);
 
   for(let n=1; n<=N; n++){
-    const f = stats.freq[n];
-    const gap = stats.lastSeen[n];
-    const rf = stats.recentFreq[n];
-
-    // Component scores (normalized 0-2)
-    const bayesian = (f + 1) / (expected + 1);             // posterior probability ratio
-    const dueness = Math.tanh(gap / (N/cfg.pick * 2));     // 0..1, saturates
-    const momentum = stats.ema[n] * 10;                    // recent activity
-    const recent = rf / (30 * cfg.pick / N);               // recent freq ratio
-    const chiSqDev = Math.abs(f - expected) / Math.sqrt(expected); // standardized deviation
-
-    // Markov: P(n appears | numbers in last draw appeared)
-    let markovScore = 0;
+    const bayesian = (stats.freq[n] + 1) / (expected + 1);
+    const dueness  = Math.tanh(stats.lastSeen[n] / (N/cfg.pick * 2));
+    const momentum = stats.ema[n] * 10;
+    const recent   = stats.recentFreq[n] / (30 * cfg.pick / N);
+    const chiSqDev = Math.abs(stats.freq[n] - expected) / Math.sqrt(expected);
+    let markov = 0;
     if(lastDraw.length){
       lastDraw.forEach(p => {
-        if(stats.prevCounts[p] > 0)
-          markovScore += stats.transition[p][n] / stats.prevCounts[p];
+        if(stats.prevCounts[p] > 0) markov += stats.transition[p][n] / stats.prevCounts[p];
       });
-      markovScore /= lastDraw.length;
-      markovScore *= N; // normalize
+      markov = (markov / lastDraw.length) * N;
     }
-
-    switch(model){
-      case 'bayes':    scores[n] = bayesian; break;
-      case 'markov':   scores[n] = markovScore + 0.3*bayesian; break;
-      case 'hot':      scores[n] = bayesian * 1.5 + recent; break;
-      case 'cold':     scores[n] = dueness * 2 + (2 - bayesian); break;
-      case 'recent':   scores[n] = momentum * 3 + recent; break;
-      case 'balanced': scores[n] = bayesian + dueness; break;
-      case 'ai':
-      default:
-        // AI Ensemble: weighted vote across all signals
-        scores[n] =
-          0.25 * bayesian +
-          0.20 * dueness +
-          0.20 * markovScore +
-          0.15 * momentum +
-          0.10 * recent +
-          0.10 * (chiSqDev * 0.5);
-    }
+    scores[n] = 0.25*bayesian + 0.20*dueness + 0.20*markov + 0.15*momentum + 0.10*recent + 0.05*chiSqDev;
   }
   return scores;
 }
@@ -459,18 +425,18 @@ function pairBoost(stats, picked, candidate){
   return 1 + boost / (picked.length * 20);
 }
 
-// Dự đoán bonus (số đặc biệt) — bonus có pool riêng (bonusMax),
-// có thể overlap với main numbers (vd: 5/35 bonus 1-12, main 1-35).
-// Power 6/55: bonusMax=55, bonus được quay sau, có thể trùng hoặc khác main.
+// Dự đoán bonus (số đặc biệt).
+// Verified by historical data:
+//   - 6/55 (n=1347, 0% overlap): bonus là quả thứ 7 cùng máy → PHẢI ≠ 6 main
+//   - 5/35 (n=583, ~11% overlap): bonus pool riêng (1-12) độc lập với main (1-35)
 function predictBonus(stats, cfg, mainNumbers){
   if(!cfg.bonus || !stats.bonusTotal) return null;
   const M = cfg.bonusMax;
+  const exclude = cfg.bonusFromMain ? new Set(mainNumbers) : null;
   const expected = stats.bonusTotal / M;
-  // Chỉ với 6/55: bonus quay từ 1-55, theo luật có thể loại trừ main (depending on interpretation).
-  // Để an toàn về mặt thống kê, KHÔNG loại trừ main — bonus là độc lập, có thể trùng.
-  // Với 5/35 (1-12), không thể loại trừ vì pool quá nhỏ.
   const scores = Array(M+1).fill(0);
   for(let n=1; n<=M; n++){
+    if(exclude && exclude.has(n)) continue;
     const bayesian = (stats.bonusFreq[n] + 1) / (expected + 1);
     const gap = stats.bonusLastSeen[n];
     const dueness = Math.tanh(gap / (M * 1.5));
@@ -483,7 +449,6 @@ function predictBonus(stats, cfg, mainNumbers){
     r -= scores[n];
     if(r <= 0) return n;
   }
-  // Fallback: best score
   let best = 0, bestScore = -Infinity;
   for(let n=1; n<=M; n++){
     if(scores[n] > bestScore){ bestScore = scores[n]; best = n }
@@ -535,33 +500,6 @@ function generateSet(scores, stats, cfg, useConstraints=true){
   return best;
 }
 
-function predict(draws, cfg, model='ai'){
-  const stats = computeStats(draws, cfg);
-  const scores = scoreNumbers(stats, cfg, model, draws);
-  const maxScore = Math.max(...scores.slice(1));
-
-  const sets = [];
-  const seen = new Set();
-  let tries = 0;
-  while(sets.length < 4 && tries < 30){
-    tries++;
-    const s = generateSet(scores, stats, cfg, model==='ai');
-    const key = s.numbers.join(',');
-    if(seen.has(key)) continue;
-    seen.add(key);
-    const conf = s.numbers.reduce((sum,n)=>sum+scores[n],0) / (cfg.pick * maxScore);
-    sets.push({
-      numbers: s.numbers,
-      confidence: Math.min(0.99, conf),
-      sum: s.sum,
-      odd: s.odd,
-      spread: s.spread,
-    });
-  }
-  sets.sort((a,b)=>b.confidence-a.confidence);
-  return sets.slice(0, 4);
-}
-
 // ============================================================
 // RENDERING
 // ============================================================
@@ -575,286 +513,9 @@ function ball(n, cls=''){
   return el;
 }
 
-function renderKPIs(stats, cfg){
-  const d = dataset[currentGame];
-  $('#kpiDraws').textContent = d.length.toLocaleString();
-  $('#kpiLatest').textContent = d[0]?.date.slice(5) || '—';
-  const sorted = stats.freq.map((c,n)=>({n,c})).slice(1).sort((a,b)=>b.c-a.c);
-  $('#kpiHot').textContent = String(sorted[0].n).padStart(2,'0') + ' · ' + sorted[0].c + 'x';
-  $('#kpiCold').textContent = String(sorted[sorted.length-1].n).padStart(2,'0') + ' · ' + sorted[sorted.length-1].c + 'x';
-}
-
-function renderHotCold(stats){
-  const sorted = stats.freq.map((c,n)=>({n,c})).slice(1).sort((a,b)=>b.c-a.c);
-  const hot = sorted.slice(0,6), cold = sorted.slice(-6).reverse();
-  const fill = (el, items, cls) => {
-    el.innerHTML='';
-    items.forEach(({n,c}) => {
-      const w = document.createElement('div');
-      w.className = 'text-center';
-      w.appendChild(ball(n, cls));
-      const l = document.createElement('div');
-      l.className = 'text-[10px] text-gray-500 mt-1';
-      l.textContent = c + 'x';
-      w.appendChild(l);
-      el.appendChild(w);
-    });
-  };
-  fill($('#hotList'), hot, 'hot');
-  fill($('#coldList'), cold, 'cold');
-}
-
-function renderFreqChart(stats, cfg){
-  const labels = Array.from({length:cfg.max}, (_,i) => String(i+1).padStart(2,'0'));
-  const data = stats.freq.slice(1);
-  const max = Math.max(...data), min = Math.min(...data);
-  const colors = data.map(v => {
-    const t = (v-min)/(max-min||1);
-    return t>0.8?'#dc2626':t>0.6?'#f97316':t>0.4?'#facc15':t>0.2?'#a3e635':'#3b82f6';
-  });
-  if(charts.freq) charts.freq.destroy();
-  charts.freq = new Chart($('#freqChart'), {
-    type:'bar',
-    data:{ labels, datasets:[{ data, backgroundColor:colors, borderRadius:3 }]},
-    options:{
-      responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label: c => 'Xuất hiện: '+c.parsed.y+' lần' }}},
-      scales:{
-        x:{ ticks:{color:'#6b7280',font:{size:9}}, grid:{display:false} },
-        y:{ ticks:{color:'#6b7280'}, grid:{color:'rgba(255,255,255,0.03)'} }
-      }
-    }
-  });
-}
-
-function renderHeatmap(stats, cfg){
-  const hm = $('#heatmap'); hm.innerHTML='';
-  const cols = cfg.max <= 35 ? 7 : cfg.max <= 45 ? 9 : 11;
-  hm.style.gridTemplateColumns = `repeat(${cols}, minmax(0,1fr))`;
-  const data = stats.freq.slice(1);
-  const max = Math.max(...data), min = Math.min(...data);
-  for(let n=1; n<=cfg.max; n++){
-    const c = stats.freq[n];
-    const t = (c-min)/(max-min||1);
-    const color = t>0.8?'#dc2626':t>0.65?'#f97316':t>0.5?'#facc15':t>0.35?'#a3e635':t>0.2?'#3b82f6':'#1e3a8a';
-    const cell = document.createElement('div');
-    cell.className = 'heat-cell';
-    cell.style.background = color;
-    cell.style.color = t>0.4?'#1f2937':'#fff';
-    cell.innerHTML = `<span>${String(n).padStart(2,'0')}</span><span class="cnt">${c}</span>`;
-    cell.title = `Số ${n} · ${c} lần · gap ${stats.lastSeen[n]} kỳ`;
-    hm.appendChild(cell);
-  }
-}
-
-function renderGapChart(stats){
-  const arr = stats.lastSeen.map((g,n)=>({n,g})).slice(1).sort((a,b)=>b.g-a.g).slice(0,15);
-  if(charts.gap) charts.gap.destroy();
-  charts.gap = new Chart($('#gapChart'), {
-    type:'bar',
-    data:{
-      labels: arr.map(x => String(x.n).padStart(2,'0')),
-      datasets:[{ data: arr.map(x => x.g), backgroundColor:'#3b82f6', borderRadius:3 }]
-    },
-    options:{
-      indexAxis:'y', responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label: c => 'Vắng '+c.parsed.x+' kỳ' }}},
-      scales:{
-        x:{ ticks:{color:'#6b7280'}, grid:{color:'rgba(255,255,255,0.03)'} },
-        y:{ ticks:{color:'#6b7280'}, grid:{display:false} }
-      }
-    }
-  });
-}
-
-function renderDist(stats, cfg){
-  // odd/even
-  const dist = Array(cfg.pick+1).fill(0);
-  stats.oddCounts.forEach(c => dist[c]++);
-  if(charts.oe) charts.oe.destroy();
-  charts.oe = new Chart($('#oeChart'), {
-    type:'doughnut',
-    data:{
-      labels: dist.map((_,i)=>`${i}L/${cfg.pick-i}C`),
-      datasets:[{ data:dist, backgroundColor:['#1e3a8a','#3b82f6','#10b981','#facc15','#f97316','#dc2626','#7f1d1d'], borderWidth:0 }]
-    },
-    options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{position:'right',labels:{color:'#9ca3af',font:{size:10},boxWidth:10}}}}
-  });
-  const mi = dist.indexOf(Math.max(...dist));
-  $('#oeInsight').textContent = `Phổ biến nhất: ${mi} lẻ + ${cfg.pick-mi} chẵn (${(dist[mi]/stats.oddCounts.length*100).toFixed(0)}% kỳ)`;
-
-  // sum
-  const bins = 10, min = cfg.pick, max = cfg.pick*cfg.max, step = (max-min)/bins;
-  const hist = Array(bins).fill(0);
-  stats.sums.forEach(s => { const i = Math.min(bins-1, Math.floor((s-min)/step)); hist[i]++ });
-  if(charts.sum) charts.sum.destroy();
-  charts.sum = new Chart($('#sumChart'), {
-    type:'bar',
-    data:{
-      labels: Array.from({length:bins},(_,i)=>Math.round(min+i*step)+''),
-      datasets:[{ data:hist, backgroundColor:'#a78bfa', borderRadius:3 }]
-    },
-    options:{
-      responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{display:false} },
-      scales:{
-        x:{ ticks:{color:'#6b7280',font:{size:9}}, grid:{display:false} },
-        y:{ ticks:{color:'#6b7280'}, grid:{color:'rgba(255,255,255,0.03)'} }
-      }
-    }
-  });
-  $('#sumInsight').textContent = `Trung bình: ${stats.avgSum.toFixed(0)} · Khoảng tối ưu: ${Math.round(stats.avgSum-stats.stdSum)}–${Math.round(stats.avgSum+stats.stdSum)}`;
-}
-
-function renderPairs(stats){
-  const div = $('#pairList'); div.innerHTML='';
-  stats.topPairs.slice(0,12).forEach(([k, c]) => {
-    const [a,b] = k.split('-');
-    const row = document.createElement('div');
-    row.className = 'flex items-center justify-between bg-white/[0.02] border border-white/5 rounded-lg px-3 py-2';
-    const left = document.createElement('div');
-    left.className = 'flex items-center gap-2';
-    left.appendChild(ball(a, 'xs')); left.appendChild(ball(b, 'xs'));
-    row.appendChild(left);
-    const r = document.createElement('span');
-    r.className = 'pill bg-purple-500/10 text-purple-300';
-    r.textContent = c + 'x';
-    row.appendChild(r);
-    div.appendChild(row);
-  });
-}
-
-function renderDraws(filter=''){
-  const tbody = $('#drawsBody'); tbody.innerHTML='';
-  const cfg = GAMES[currentGame];
-  const all = dataset[currentGame];
-  const f = filter.trim();
-  const filtered = f ? all.filter(d => d.numbers.includes(parseInt(f))) : all;
-  $('#histCount').textContent = filtered.length + ' kỳ';
-  filtered.slice(0, 150).forEach(d => {
-    const sum = d.numbers.reduce((a,b)=>a+b,0);
-    const odd = d.numbers.filter(n => n%2===1).length;
-    const tr = document.createElement('tr');
-    const balls = d.numbers.map(n => `<span class="ball xs" style="margin-right:3px">${String(n).padStart(2,'0')}</span>`).join('');
-    tr.innerHTML = `<td class="font-mono text-gray-500 text-xs">#${d.id.toString().slice(-5)}</td><td class="text-gray-400 text-xs">${d.date}</td><td>${balls}</td><td class="font-semibold text-yellow-400">${sum}</td><td class="text-gray-500 text-xs">${odd}/${cfg.pick-odd}</td>`;
-    tbody.appendChild(tr);
-  });
-  if(!filtered.length) tbody.innerHTML = '<tr><td colspan="5" class="text-center text-gray-600 py-6">Không tìm thấy</td></tr>';
-}
-
-function renderPredictions(){
-  const cfg = GAMES[currentGame];
-  const model = $('#predModel').value;
-  const sets = predict(dataset[currentGame], cfg, model);
-  const div = $('#predSets'); div.innerHTML='';
-  sets.forEach((s, i) => {
-    const card = document.createElement('div');
-    card.className = 'bg-white/[0.02] hover:bg-white/[0.04] border border-white/5 rounded-xl p-3 transition';
-    const pct = (s.confidence*100).toFixed(0);
-    const ballsHtml = s.numbers.map(n => `<span class="ball sm ${model==='ai'?'ai':''}" style="margin-right:5px">${String(n).padStart(2,'0')}</span>`).join('');
-    card.innerHTML = `
-      <div class="flex items-center justify-between gap-3 flex-wrap">
-        <div class="flex items-center gap-3 flex-1 min-w-0">
-          <div class="flex-shrink-0 w-7 h-7 rounded-lg bg-purple-500/15 text-purple-300 flex items-center justify-center text-xs font-bold">${i+1}</div>
-          <div class="flex flex-wrap items-center">${ballsHtml}</div>
-        </div>
-        <div class="flex items-center gap-3 text-xs">
-          <div class="text-center">
-            <div class="text-[9px] text-gray-500 uppercase">Tổng</div>
-            <div class="font-bold text-yellow-400">${s.sum}</div>
-          </div>
-          <div class="text-center">
-            <div class="text-[9px] text-gray-500 uppercase">L/C</div>
-            <div class="font-bold text-gray-300">${s.odd}/${cfg.pick-s.odd}</div>
-          </div>
-          <div class="text-center min-w-[60px]">
-            <div class="text-[9px] text-gray-500 uppercase">Score</div>
-            <div class="font-bold text-purple-300">${pct}%</div>
-            <div class="progress-bar mt-1"><div class="progress-fill" style="width:${pct}%"></div></div>
-          </div>
-        </div>
-      </div>
-    `;
-    div.appendChild(card);
-  });
-  $('#methodExplain').innerHTML = MODEL_DESC[model];
-  $('#predMeta').textContent = `Mô hình: ${$('#predModel').selectedOptions[0].textContent} · ${dataset[currentGame].length} kỳ training`;
-}
-
-// ============================================================
-// TABS
-// ============================================================
-function switchTab(name){
-  $$('.section-tab').forEach(t => t.classList.toggle('active', t.dataset.tab===name));
-  $$('.tab-pane').forEach(p => p.classList.toggle('hidden', p.id !== 'tab-'+name));
-}
-
-// ============================================================
-// MAIN
-// ============================================================
-// ============================================================
-// EVALUATE A DRAW against historical patterns
-// ============================================================
-function evaluateDraw(d, stats, cfg, allDraws, drawIndex){
-  const K = cfg.pick, N = cfg.max;
-  const sortedFreq = stats.freq.map((c,n)=>({n,c})).slice(1).sort((a,b)=>b.c-a.c);
-  const hotSet = new Set(sortedFreq.slice(0, Math.ceil(N/3)).map(x=>x.n));
-  const coldSet = new Set(sortedFreq.slice(-Math.ceil(N/3)).map(x=>x.n));
-
-  // Recompute stats EXCLUDING this draw and forward draws (only past data)
-  // For simplicity, use all stats as historical reference
-  const labels = d.numbers.map(n => hotSet.has(n) ? 'hot' : coldSet.has(n) ? 'cold' : 'neutral');
-  const hotCount = labels.filter(x=>x==='hot').length;
-  const coldCount = labels.filter(x=>x==='cold').length;
-
-  const sum = d.numbers.reduce((a,b)=>a+b,0);
-  const odd = d.numbers.filter(n=>n%2===1).length;
-  const spread = d.numbers[K-1] - d.numbers[0];
-
-  // Metric scores (0-100)
-  // 1. Sum normality: z-score → score
-  const z = Math.abs(sum - stats.avgSum) / (stats.stdSum || 1);
-  const sumScore = Math.max(0, 100 - z*30);
-
-  // 2. Odd/even balance: closer to K/2 = better
-  const oeDiff = Math.abs(odd - K/2);
-  const oeScore = Math.max(0, 100 - oeDiff * 30);
-
-  // 3. Spread: ratio to ideal (N*(K-1)/(K+1) approx)
-  const idealSpread = N * 0.75;
-  const spreadScore = Math.max(0, 100 - Math.abs(spread - idealSpread) / idealSpread * 100);
-
-  // 4. Hot/Cold balance: ideal is mixed, ~K/3 hot + K/3 cold
-  const idealHC = K/3;
-  const hcDiff = Math.abs(hotCount - idealHC) + Math.abs(coldCount - idealHC);
-  const balanceScore = Math.max(0, 100 - hcDiff * 20);
-
-  // 5. Pair affinity: avg pair frequency
-  let pairSum = 0, pairN = 0;
-  for(let i=0;i<K;i++) for(let j=i+1;j<K;j++){
-    const k = d.numbers[i]+'-'+d.numbers[j];
-    pairSum += (stats.pairs[k]||0);
-    pairN++;
-  }
-  const avgPair = pairSum / pairN;
-  const expectedPair = (allDraws.length * (K*(K-1)/2)) / (N*(N-1)/2);
-  const pairScore = Math.min(100, (avgPair / expectedPair) * 60);
-
-  // Overall composite
-  const overall = (sumScore*0.20 + oeScore*0.15 + spreadScore*0.15 + balanceScore*0.25 + pairScore*0.25);
-
-  // Frequency rank per number
-  const ranks = d.numbers.map(n => {
-    const r = sortedFreq.findIndex(x=>x.n===n) + 1;
-    return { n, rank:r, count: stats.freq[n], label: labels[d.numbers.indexOf(n)] };
-  });
-
-  return { labels, ranks, hotCount, coldCount, sum, odd, spread,
-    sumScore, oeScore, spreadScore, balanceScore, pairScore, overall };
-}
 
 // Prediction cache — Supabase (L2 persistent) + localStorage (L1 fast)
-const PRED_CACHE_VERSION = 'v4'; // v4: bonusMax cho 5/35 (1-12)
+const PRED_CACHE_VERSION = 'v5'; // v5: 6/55 bonus excludes main (verified independent for 5/35)
 const SUPABASE_URL = 'https://bfstkfcuhomtetedexmq.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_C7422FmsYC23Bwh5ti_5xg_5LuV8GF7';
 const SB_HEADERS = { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY };
@@ -926,7 +587,7 @@ function backtestPredict(drawIdx, cfg, game){
   if(past.length < 30) return null;
 
   const pastStats = computeStats(past, cfg);
-  const scores = scoreNumbers(pastStats, cfg, 'ai', past);
+  const scores = scoreNumbers(pastStats, cfg, past);
   const maxScore = Math.max(...scores.slice(1));
   const seed = dateSeed(new Date(drawDateStr), game);
 
@@ -1051,8 +712,8 @@ function nextDrawDate(game){
   for(let i=0;i<8;i++){
     const d = new Date(now); d.setDate(now.getDate()+i);
     if(sched.includes(d.getDay())){
-      // if today and past 18:00 → skip to next
-      if(i===0 && now.getHours() >= 19) continue;
+      // Vietlott quay ~18:00, kết quả công bố ~19:30 → after that, skip to next draw
+      if(i===0 && (now.getHours() > 19 || (now.getHours()===19 && now.getMinutes()>=30))) continue;
       return d;
     }
   }
@@ -1082,7 +743,7 @@ function withSeed(seed, fn){
 
 function generatePremium(draws, cfg, game){
   const stats = computeStats(draws, cfg);
-  const scores = scoreNumbers(stats, cfg, 'ai', draws);
+  const scores = scoreNumbers(stats, cfg, draws);
   const maxScore = Math.max(...scores.slice(1));
   const today = new Date();
   const todayStr = today.toISOString().slice(0,10);
